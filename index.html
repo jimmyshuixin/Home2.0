@@ -690,9 +690,9 @@
             <div class="nav-links">
               <a href="#about" @click.prevent="scrollTo('about')">故事</a>
               <a href="#resume" @click.prevent="scrollTo('resume')">轨迹</a>
-              <a href="#tech" @click.prevent="scrollTo('tech')">技术</a>
-              <div class="nav-divider"></div>
               <a href="#lifestyle" @click.prevent="scrollTo('lifestyle')">生活</a>
+              <div class="nav-divider"></div>
+              <a href="#tech" @click.prevent="scrollTo('tech')">技术</a>
               <div class="nav-divider"></div>
               <a href="#plans" @click.prevent="scrollTo('plans')">未来</a>
               <button class="theme-toggle-btn" @click="toggleTheme" :aria-label="isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'">
@@ -710,11 +710,13 @@
                 <div class="mobile-section-label">故事主线</div>
                 <a href="#about" @click.prevent="handleMobileClick('about')"><i class="ri-quill-pen-line"></i> 关于</a>
                 <a href="#resume" @click.prevent="handleMobileClick('resume')"><i class="ri-footprint-line"></i> 轨迹</a>
-                <a href="#tech" @click.prevent="handleMobileClick('tech')"><i class="ri-code-s-slash-line"></i> 技术</a>
                 
                 <div class="mobile-section-label">生活支线</div>
                 <a href="#lifestyle" @click.prevent="handleMobileClick('lifestyle')"><i class="ri-cup-line"></i> 生活</a>
 
+                <div class="mobile-section-label">技术创造</div>
+                <a href="#tech" @click.prevent="handleMobileClick('tech')"><i class="ri-code-s-slash-line"></i> 技术</a>
+                
                 <div class="mobile-section-label">未来篇章</div>
                 <a href="#plans" @click.prevent="handleMobileClick('plans')"><i class="ri-rocket-line"></i> 未来</a>
             </div>
@@ -817,7 +819,7 @@
             <div class="part-content">
                 <span class="part-vol">VOLUME.1</span>
                 <h2 class="part-title-main">探索与求索</h2>
-                <p style="font-weight: bold; color: var(--ink-secondary);">这是我的主线剧情，记录了我的学术生涯、技能树点亮过程。</p>
+                <p style="font-weight: bold; color: var(--ink-secondary);">这是我的主线剧情，记录了我的学术生涯与成长轨迹。</p>
             </div>
         </div>
 
@@ -888,10 +890,107 @@
           </div>
         </div>
 
-        <!-- 03 Tech -->
-        <div id="tech" class="scatter-grid">
+        <div class="part-header" style="margin-top: 6rem;">
+            <div class="part-bg-text">SIDELINE</div>
+            <div class="part-content">
+                <span class="part-vol">VOLUME.2</span>
+                <h2 class="part-title-main">热爱与生活</h2>
+                <p style="font-weight: bold; color: var(--ink-secondary);">这是我的支线剧情，记录了那个鲜活、真实的自己。</p>
+            </div>
+        </div>
+
+        <!-- 03 Lifestyle -->
+        <div id="lifestyle" class="scatter-grid">
             <div class="section-header">
                 <span class="section-label">03</span>
+                <h2 class="section-title">活力<br>& 生活</h2>
+            </div>
+            
+            <div class="lifestyle-grid">
+                <!-- 04 Lifestyle 下的第一个 sketch-card -->
+                <div class="sketch-card" style="position: relative; overflow: hidden; z-index: 1;">
+                    <!-- ====== 插入你的运动人物图片 ====== -->
+                    <div class="fit-bg-img-container">
+                        <img src="./content/Photos/6.png" class="fit-bg-img" alt="Fitness Figure" loading="lazy">
+                    </div>
+                    <!-- ================================ -->
+
+                    <div style="position: relative; z-index: 2;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+                            <div>
+                                <h3 style="font-family: 'Zhi Mang Xing'; font-size: 2rem;">运动律动</h3>
+                                <div style="font-weight: bold; color: var(--ink-secondary);">累计健身天数</div>
+                            </div>
+                            <i class="ri-run-line" style="font-size: 2rem; color: var(--marker-highlight);"></i>
+                        </div>
+                        <div style="margin-bottom: 2rem;">
+                            <span class="fit-big-num">{{ fitnessDayCount }}</span>
+                            <span style="font-weight: 900; font-size: 1.2rem;">Days</span>
+                        </div>
+                        <div>
+                            <div style="font-weight: bold; margin-bottom: 10px;">近期训练强度图：</div>
+                            <div class="fit-chart-wrapper">
+                                <svg class="heart-rate-svg" viewBox="0 0 400 60" preserveAspectRatio="none" style="width: 100%; height: 100%;">
+                                    <path class="heart-rate-path" d="M0,50 L30,48 L45,20 L60,52 L100,45 L110,10 L130,55 L160,48 L180,30 L200,50 L250,45 L265,5 L280,55 L320,48 L340,15 L360,50 L400,48" />
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sketch-card" style="padding: 0; display: flex; flex-direction: column;">
+                    <div class="read-now-section" style="padding: 2rem;">
+                        <img :src="bookshelf[0].coverUrl" class="read-cover-img" alt="Current Read" @error="handleImgError" loading="lazy">
+                        <div style="display: flex; flex-direction: column; justify-content: center; flex: 1;">
+                            <div style="font-family: 'Zhi Mang Xing'; font-size: 1.8rem; line-height: 1.2;">{{ bookshelf[0].title }}</div>
+                            <div style="font-weight: bold; color: var(--ink-secondary); margin-bottom: 10px;">{{ bookshelf[0].author }}</div>
+                            <div style="color: var(--marker-highlight); font-size: 1.2rem;">
+                                <i class="ri-star-fill"></i><i class="ri-star-fill"></i><i class="ri-star-fill"></i><i class="ri-star-fill"></i><i class="ri-star-fill"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="padding: 1.5rem 2rem; flex: 1;">
+                        <div style="font-weight: 900; margin-bottom: 1rem; text-decoration: underline wavy;">书架藏书</div>
+                        <div style="display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 10px; scrollbar-width: none;">
+                             <div v-for="(book, i) in bookshelf.slice(1)" :key="i" class="mini-book-item" @click="switchBook(i)" style="cursor: pointer;">
+                                <img :src="book.coverUrl" class="mini-book-cover" :alt="book.title" @error="handleImgError" loading="lazy">
+                             </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 新增社交联系方式模块 -->
+            <div style="grid-column: 1 / -1; margin-top: 1.5rem;">
+                <h3 class="resume-subtitle"><i class="ri-links-fill" style="color: var(--marker-highlight);"></i> 社交连接</h3>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 1.5rem;">
+                    <!-- 抖音卡片 -->
+                    <a href="https://www.douyin.com/search/tidingjinluo" target="_blank" class="sketch-card" style="display: flex; align-items: center; gap: 1.2rem; padding: 1.5rem; text-decoration: none; border: 2px solid #fe2c55;">
+                        <i class="ri-tiktok-fill" style="font-size: 2.5rem; color: #fe2c55;"></i>
+                        <div style="flex: 1;">
+                            <div style="font-family: 'Zhi Mang Xing'; font-size: 1.8rem; line-height: 1.2; color: var(--ink-primary);">抖音</div>
+                            <div style="font-weight: bold; color: var(--ink-secondary);">ID: tidingjinluo</div>
+                        </div>
+                        <i class="ri-arrow-right-up-line" style="font-size: 1.5rem; color: #fe2c55;"></i>
+                    </a>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="part-header" style="margin-top: 6rem;">
+            <div class="part-bg-text">CREATION</div>
+            <div class="part-content">
+                <span class="part-vol">VOLUME.3</span>
+                <h2 class="part-title-main">技术与创造</h2>
+                <p style="font-weight: bold; color: var(--ink-secondary);">点亮技能树，用代码与工程丈量世界。</p>
+            </div>
+        </div>
+
+        <!-- 04 Tech -->
+        <div id="tech" class="scatter-grid">
+            <div class="section-header">
+                <span class="section-label">04</span>
                 <h2 class="section-title">技术<br>& 创造</h2>
             </div>
             <div class="section-content">
@@ -963,117 +1062,9 @@
         </div>
 
         <div class="part-header" style="margin-top: 6rem;">
-            <div class="part-bg-text">SIDELINE</div>
-            <div class="part-content">
-                <span class="part-vol">VOLUME.2</span>
-                <h2 class="part-title-main">热爱与生活</h2>
-                <p style="font-weight: bold; color: var(--ink-secondary);">这是我的支线剧情，记录了那个鲜活、真实的自己。</p>
-            </div>
-        </div>
-
-        <!-- 04 Lifestyle -->
-        <div id="lifestyle" class="scatter-grid">
-            <div class="section-header">
-                <span class="section-label">04</span>
-                <h2 class="section-title">活力<br>& 生活</h2>
-            </div>
-            
-            <div class="lifestyle-grid">
-                <!-- 04 Lifestyle 下的第一个 sketch-card -->
-                <div class="sketch-card" style="position: relative; overflow: hidden; z-index: 1;">
-                    <!-- ====== 插入你的运动人物图片 ====== -->
-                    <div class="fit-bg-img-container">
-                        <img src="./content/Photos/6.png" class="fit-bg-img" alt="Fitness Figure" loading="lazy">
-                    </div>
-                    <!-- ================================ -->
-
-                    <div style="position: relative; z-index: 2;">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
-                            <div>
-                                <h3 style="font-family: 'Zhi Mang Xing'; font-size: 2rem;">运动律动</h3>
-                                <div style="font-weight: bold; color: var(--ink-secondary);">累计健身天数</div>
-                            </div>
-                            <i class="ri-run-line" style="font-size: 2rem; color: var(--marker-highlight);"></i>
-                        </div>
-                        <div style="margin-bottom: 2rem;">
-                            <span class="fit-big-num">{{ fitnessDayCount }}</span>
-                            <span style="font-weight: 900; font-size: 1.2rem;">Days</span>
-                        </div>
-                        <div>
-                            <div style="font-weight: bold; margin-bottom: 10px;">近期训练强度图：</div>
-                            <div class="fit-chart-wrapper">
-                                <svg class="heart-rate-svg" viewBox="0 0 400 60" preserveAspectRatio="none" style="width: 100%; height: 100%;">
-                                    <path class="heart-rate-path" d="M0,50 L30,48 L45,20 L60,52 L100,45 L110,10 L130,55 L160,48 L180,30 L200,50 L250,45 L265,5 L280,55 L320,48 L340,15 L360,50 L400,48" />
-                                </svg>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="sketch-card" style="padding: 0; display: flex; flex-direction: column;">
-                    <div class="read-now-section" style="padding: 2rem;">
-                        <img :src="bookshelf[0].coverUrl" class="read-cover-img" alt="Current Read" @error="handleImgError" loading="lazy">
-                        <div style="display: flex; flex-direction: column; justify-content: center; flex: 1;">
-                            <div style="font-family: 'Zhi Mang Xing'; font-size: 1.8rem; line-height: 1.2;">{{ bookshelf[0].title }}</div>
-                            <div style="font-weight: bold; color: var(--ink-secondary); margin-bottom: 10px;">{{ bookshelf[0].author }}</div>
-                            <div style="color: var(--marker-highlight); font-size: 1.2rem;">
-                                <i class="ri-star-fill"></i><i class="ri-star-fill"></i><i class="ri-star-fill"></i><i class="ri-star-fill"></i><i class="ri-star-fill"></i>
-                            </div>
-                        </div>
-                    </div>
-                    <div style="padding: 1.5rem 2rem; flex: 1;">
-                        <div style="font-weight: 900; margin-bottom: 1rem; text-decoration: underline wavy;">书架藏书</div>
-                        <div style="display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 10px; scrollbar-width: none;">
-                             <div v-for="(book, i) in bookshelf.slice(1)" :key="i" class="mini-book-item" @click="switchBook(i)" style="cursor: pointer;">
-                                <img :src="book.coverUrl" class="mini-book-cover" :alt="book.title" @error="handleImgError" loading="lazy">
-                             </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Blender 作品 B站UP主的日常模块 -->
-            <div style="grid-column: 1 / -1; margin-top: 1.5rem;">
-                <h3 class="resume-subtitle"><i class="ri-bilibili-line" style="color: #00A1D6;"></i> B站UP主的日常</h3>
-                <div class="sketch-card" style="padding: 1.5rem;">
-                    <div class="iframe-container">
-                        <iframe src="//player.bilibili.com/player.html?bvid=BV1r2fjBwEQ6&page=1&high_quality=1&danmaku=0" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true"></iframe>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- 新增社交联系方式模块 -->
-            <div style="grid-column: 1 / -1; margin-top: 1.5rem;">
-                <h3 class="resume-subtitle"><i class="ri-links-fill" style="color: var(--marker-highlight);"></i> 社交连接</h3>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 1.5rem;">
-                    <!-- B站卡片 -->
-                    <a href="https://space.bilibili.com/520237303" target="_blank" class="sketch-card" style="display: flex; align-items: center; gap: 1.2rem; padding: 1.5rem; text-decoration: none; border: 2px solid #00A1D6;">
-                        <i class="ri-bilibili-fill" style="font-size: 2.5rem; color: #00A1D6;"></i>
-                        <div style="flex: 1;">
-                            <div style="font-family: 'Zhi Mang Xing'; font-size: 1.8rem; line-height: 1.2; color: var(--ink-primary);">哔哩哔哩</div>
-                            <div style="font-weight: bold; color: var(--ink-secondary);">UID: 520237303</div>
-                        </div>
-                        <i class="ri-arrow-right-up-line" style="font-size: 1.5rem; color: #00A1D6;"></i>
-                    </a>
-                    
-                    <!-- 抖音卡片 -->
-                    <a href="https://www.douyin.com/search/tidingjinluo" target="_blank" class="sketch-card" style="display: flex; align-items: center; gap: 1.2rem; padding: 1.5rem; text-decoration: none; border: 2px solid #fe2c55;">
-                        <i class="ri-tiktok-fill" style="font-size: 2.5rem; color: #fe2c55;"></i>
-                        <div style="flex: 1;">
-                            <div style="font-family: 'Zhi Mang Xing'; font-size: 1.8rem; line-height: 1.2; color: var(--ink-primary);">抖音</div>
-                            <div style="font-weight: bold; color: var(--ink-secondary);">ID: tidingjinluo</div>
-                        </div>
-                        <i class="ri-arrow-right-up-line" style="font-size: 1.5rem; color: #fe2c55;"></i>
-                    </a>
-                </div>
-            </div>
-
-        </div>
-
-        <div class="part-header" style="margin-top: 6rem;">
             <div class="part-bg-text">EPILOGUE</div>
             <div class="part-content">
-                <span class="part-vol">VOLUME.3</span>
+                <span class="part-vol">VOLUME.4</span>
                 <h2 class="part-title-main">未来与尾声</h2>
                 <p style="font-weight: bold; color: var(--ink-secondary);">承载着未完成的梦想，也期待着你的声音。</p>
             </div>
