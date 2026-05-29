@@ -67,7 +67,10 @@ async function handleSave(page) {
 
     <p class="live-status" aria-live="polite">{{ status }}</p>
 
-    <JournalBook v-if="mode === 'read'" id="home" :pages="pages" @open-studio="mode = 'studio'" />
-    <StudioCanvas v-else @save-page="handleSave" @close="mode = 'read'" />
+    <div v-if="mode === 'read'" id="home" class="journal-overview">
+      <JournalBook :pages="pages" @open-studio="mode = 'studio'" />
+      <StudioCanvas class="studio-preview" @save-page="handleSave" @close="mode = 'read'" />
+    </div>
+    <StudioCanvas v-else class="studio-focus" @save-page="handleSave" @close="mode = 'read'" />
   </main>
 </template>

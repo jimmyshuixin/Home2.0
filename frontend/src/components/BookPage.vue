@@ -9,6 +9,10 @@ const props = defineProps({
   side: {
     type: String,
     required: true
+  },
+  compact: {
+    type: Boolean,
+    default: false
   }
 });
 
@@ -25,7 +29,10 @@ const pageNumber = computed(() => {
 </script>
 
 <template>
-  <section class="book-page" :class="['page-' + side, 'kind-' + (page.kind || 'entry')]">
+  <section
+    class="book-page"
+    :class="['page-' + side, 'kind-' + (page.kind || 'entry'), { compact }]"
+  >
     <div class="page-pin" aria-hidden="true"></div>
     <div class="page-meta">
       <span>{{ pageNumber }}</span>
@@ -36,7 +43,10 @@ const pageNumber = computed(() => {
       <div class="cover-composition">
         <span class="cover-tape cover-tape-a"></span>
         <img :src="page.image" alt="" class="cover-photo" />
-        <h1>{{ page.title }}</h1>
+        <div class="cover-title-note">
+          <span>My Journal</span>
+          <h1>{{ page.title }}</h1>
+        </div>
         <p>{{ page.excerpt }}</p>
         <span class="cover-seal">handmade days</span>
       </div>
@@ -63,6 +73,10 @@ const pageNumber = computed(() => {
         <span class="tape tape-two"></span>
         <img :src="page.image" alt="" />
       </div>
+
+      <span class="doodle doodle-sun" aria-hidden="true"></span>
+      <span class="doodle doodle-cup" aria-hidden="true"></span>
+      <span class="doodle doodle-leaf" aria-hidden="true"></span>
 
       <img v-if="page.drawing" class="drawing-layer" :src="page.drawing" alt="" />
 

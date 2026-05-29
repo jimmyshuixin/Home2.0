@@ -32,8 +32,8 @@ export const seedPages = [
         type: "text",
         text: "今天先写一点点，像给生活按下书签。",
         x: 14,
-        y: 18,
-        width: 38,
+        y: 62,
+        width: 32,
         rotate: -3,
         color: "#25322d"
       },

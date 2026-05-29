@@ -12,12 +12,14 @@ const props = defineProps({
 
 defineEmits(["open-studio"]);
 
-const spreadStart = ref(0);
+const spreadStart = ref(2);
 const turning = ref(false);
 
 const total = computed(() => props.pages.length);
 const leftPage = computed(() => props.pages[spreadStart.value]);
 const rightPage = computed(() => props.pages[spreadStart.value + 1]);
+const mobilePage = computed(() => (leftPage.value?.kind === "toc" ? rightPage.value || leftPage.value : leftPage.value));
+const edgeTabs = ["About Me", "Daydreams", "Travels", "Little Things"];
 
 function flip(direction) {
   const next = spreadStart.value + direction * 2;
@@ -36,6 +38,8 @@ function jumpTo(index) {
 
 <template>
   <section class="reader-stage" aria-label="手账阅读器">
+    <p class="scene-note scene-note-left">desktop<br />open book<br />reading view</p>
+
     <aside class="bookmark-stack" aria-label="目录书签">
       <button
         v-for="(page, index) in pages.slice(0, 5)"
@@ -49,6 +53,9 @@ function jumpTo(index) {
     </aside>
 
     <div class="book-wrap" :class="{ turning }">
+      <div class="book-cover-cloth" aria-hidden="true"></div>
+      <div class="pressed-leaf" aria-hidden="true"></div>
+
       <button
         class="turn-button turn-left"
         type="button"
@@ -56,14 +63,18 @@ function jumpTo(index) {
         :disabled="spreadStart === 0"
         @click="flip(-1)"
       >
-        <ChevronLeft :size="24" />
+        <ChevronLeft :size="22" />
       </button>
 
-      <article class="book-spread">
+      <article class="book-spread" :class="{ 'has-right-page': rightPage }">
         <BookPage :page="leftPage" side="left" />
         <div class="book-gutter" aria-hidden="true"></div>
         <BookPage v-if="rightPage" :page="rightPage" side="right" />
       </article>
+
+      <div class="edge-tabs" aria-hidden="true">
+        <span v-for="tab in edgeTabs" :key="tab">{{ tab }}</span>
+      </div>
 
       <button
         class="turn-button turn-right"
@@ -72,13 +83,26 @@ function jumpTo(index) {
         :disabled="spreadStart + 2 >= total"
         @click="flip(1)"
       >
-        <ChevronRight :size="24" />
+        <ChevronRight :size="22" />
       </button>
     </div>
 
-    <button class="studio-ticket" type="button" @click="$emit('open-studio')">
-      <PenLine :size="19" />
-      写一页
-    </button>
+    <aside class="mobile-side" aria-label="移动端单页预览">
+      <div class="phone-preview">
+        <div class="phone-speaker" aria-hidden="true"></div>
+        <BookPage :page="mobilePage" side="mobile" compact />
+        <div class="phone-controls" aria-hidden="true">
+          <span>‹</span>
+          <span>{{ spreadStart + 1 }} / {{ total }}</span>
+          <span>›</span>
+        </div>
+      </div>
+      <p class="scene-note scene-note-right">mobile<br />one page<br />view</p>
+      <div class="washi-roll" aria-hidden="true"></div>
+      <button class="studio-ticket" type="button" @click="$emit('open-studio')">
+        <PenLine :size="18" />
+        写一页
+      </button>
+    </aside>
   </section>
 </template>
