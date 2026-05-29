@@ -1,6 +1,7 @@
 <script setup>
-import { nextTick, onMounted, ref } from "vue";
+import { nextTick, onMounted, onUnmounted, ref } from "vue";
 import { ImagePlus, MousePointer2, Pen, Plus, Save, Sparkles, StickyNote, X } from "@lucide/vue";
+import { runtimePort } from "../platform/runtimePort";
 
 const emit = defineEmits(["save-page", "close"]);
 
@@ -10,17 +11,17 @@ const activeTool = ref("pen");
 const noteDraft = ref("写在纸上的一句话");
 const elements = ref([
   {
-    id: crypto.randomUUID(),
+    id: runtimePort.createId(),
     type: "text",
     text: "拖动我，像挪一张便签。",
-    x: 18,
-    y: 16,
+    x: 58,
+    y: 32,
     width: 34,
     rotate: -4,
     color: "#26312d"
   },
   {
-    id: crypto.randomUUID(),
+    id: runtimePort.createId(),
     type: "tape",
     x: 58,
     y: 12,
@@ -38,6 +39,10 @@ const dragState = ref(null);
 onMounted(() => {
   resizeCanvas();
   window.addEventListener("resize", resizeCanvas);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("resize", resizeCanvas);
 });
 
 function resizeCanvas() {
@@ -89,7 +94,7 @@ function stopDrawing() {
 
 function addNote() {
   elements.value.push({
-    id: crypto.randomUUID(),
+    id: runtimePort.createId(),
     type: "text",
     text: noteDraft.value || "新的手写便签",
     x: 18 + Math.random() * 18,
@@ -102,7 +107,7 @@ function addNote() {
 
 function addTape() {
   elements.value.push({
-    id: crypto.randomUUID(),
+    id: runtimePort.createId(),
     type: "tape",
     x: 42 + Math.random() * 22,
     y: 12 + Math.random() * 38,
@@ -114,7 +119,7 @@ function addTape() {
 
 function addSticker() {
   elements.value.push({
-    id: crypto.randomUUID(),
+    id: runtimePort.createId(),
     type: "sticker",
     text: "nice",
     x: 56 + Math.random() * 20,
@@ -125,7 +130,7 @@ function addSticker() {
   });
 }
 
-function uploadPhoto(event) {
+async function uploadPhoto(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   if (!file.type.startsWith("image/") || file.size > 2_000_000) {
@@ -133,21 +138,21 @@ function uploadPhoto(event) {
     return;
   }
 
-  const reader = new FileReader();
-  reader.onload = () => {
+  try {
+    const src = await runtimePort.fileToDataUrl(file);
     elements.value.push({
-      id: crypto.randomUUID(),
+      id: runtimePort.createId(),
       type: "image",
-      src: reader.result,
+      src,
       x: 38,
       y: 24,
       width: 36,
       rotate: 4,
       color: ""
     });
-  };
-  reader.readAsDataURL(file);
-  event.target.value = "";
+  } finally {
+    event.target.value = "";
+  }
 }
 
 function startDrag(element, event) {
@@ -180,7 +185,7 @@ async function savePage() {
     date: new Date().toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }),
     mood: "新页",
     excerpt: excerpt.value,
-    drawing: canvasRef.value.toDataURL("image/png"),
+    drawing: runtimePort.canvasToImage(canvasRef.value),
     elements: elements.value
   });
 }
@@ -188,6 +193,13 @@ async function savePage() {
 
 <template>
   <section class="studio-stage" aria-label="手账画板">
+    <div class="studio-bar">
+      <button type="button" @click="emit('close')">← 回到手账</button>
+      <span>Editing {{ title }}</span>
+      <span>✓ H5 草稿</span>
+      <button type="button" @click="savePage">保存页面</button>
+    </div>
+
     <div class="tool-sash" aria-label="画板工具">
       <button :class="{ active: activeTool === 'pen' }" type="button" @click="activeTool = 'pen'">
         <Pen :size="19" />

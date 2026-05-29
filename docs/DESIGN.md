@@ -4,10 +4,11 @@
 
 Home2.0 should feel like a public, approachable life journal rather than a boxed blog or dashboard. The main metaphor is a real scrapbook book:
 
-- Desktop: an open spread with two visible pages.
-- Mobile: one page at a time.
+- PC reading H5: an open spread with two visible pages.
+- Mobile H5: one page at a time, without the desktop book shell.
 - Content: handwriting, taped photos, stickers, bookmarks, cover and table of contents.
-- Admin: a paper canvas where the owner can write, draw, paste photos and save a page.
+- PC admin H5: a separate paper canvas where the owner can write, draw, paste photos and save a page.
+- Mini program upgrade: keep platform-specific browser or `wx.*` calls behind `frontend/src/platform/runtimePort.js`.
 
 ## Concept image
 

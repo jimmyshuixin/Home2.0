@@ -7,6 +7,7 @@
 - 前端：Vue 3 + Vite
 - 后端：Node.js + Express
 - 结构：`frontend/` 与 `backend/` 分离
+- 形态：H5 响应式页面，当前面向浏览器，保留微信小程序平台适配口
 - 风格：手写字体、纸张纹理、胶带贴图、书签、目录、封面
 
 ## 本地运行
@@ -25,6 +26,10 @@ frontend/          Vue3 手账阅读器与画板编辑台
 backend/           Express 内容 API
 docs/              设计概念图与项目说明资料
 ```
+
+## H5 与小程序升级口
+
+当前实现是 H5：`#home` 是前台阅读页，PC 展示摊开的双页书，移动端自动收为单页；`#studio` 是 PC 后台画板编辑台。浏览器能力通过 `frontend/src/platform/runtimePort.js` 收口，包括请求、缓存、图片读取、ID 生成和画布导出。日后升级微信小程序时，可以用同文件中的 `createWechatMiniProgramPort(wx)` 替换 H5 port，再把页面组件迁移到小程序视图层。
 
 ## 已实现的第一版体验
 

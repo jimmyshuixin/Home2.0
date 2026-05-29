@@ -4,9 +4,9 @@ import { BookOpen, Palette } from "@lucide/vue";
 import JournalBook from "./components/JournalBook.vue";
 import StudioCanvas from "./components/StudioCanvas.vue";
 import { seedPages } from "./data/seedPages";
-import { createPage, fetchPages } from "./services/api";
+import { createPage, fetchPages, readCachedPages, runtimePort, writeCachedPages } from "./services/api";
 
-const mode = ref("read");
+const mode = ref(window.location.hash === "#studio" ? "studio" : "read");
 const savedPages = ref([]);
 const status = ref("正在翻开手账...");
 
@@ -18,11 +18,15 @@ onMounted(async () => {
     savedPages.value = payload.pages || [];
     status.value = "后端已连接";
   } catch {
-    const cached = localStorage.getItem("home2-pages");
-    savedPages.value = cached ? JSON.parse(cached) : [];
+    savedPages.value = readCachedPages();
     status.value = "正在使用本地草稿";
   }
 });
+
+function setMode(nextMode) {
+  mode.value = nextMode;
+  window.history.replaceState(null, "", nextMode === "studio" ? "#studio" : "#home");
+}
 
 async function handleSave(page) {
   try {
@@ -32,19 +36,19 @@ async function handleSave(page) {
   } catch {
     const fallbackPage = {
       ...page,
-      id: crypto.randomUUID(),
+      id: runtimePort.createId(),
       createdAt: new Date().toISOString()
     };
     savedPages.value = [fallbackPage, ...savedPages.value];
-    localStorage.setItem("home2-pages", JSON.stringify(savedPages.value));
+    writeCachedPages(savedPages.value);
     status.value = "后端离线，已先存成本地草稿";
   }
-  mode.value = "read";
+  setMode("read");
 }
 </script>
 
 <template>
-  <main class="app-shell">
+  <main class="app-shell" :class="'mode-' + mode">
     <div class="desk-noise" aria-hidden="true"></div>
 
     <header class="topline" aria-label="Home2.0 navigation">
@@ -54,11 +58,11 @@ async function handleSave(page) {
       </a>
 
       <nav class="ribbon-nav" aria-label="主要模式">
-        <button :class="{ active: mode === 'read' }" type="button" @click="mode = 'read'">
+        <button :class="{ active: mode === 'read' }" type="button" @click="setMode('read')">
           <BookOpen :size="18" stroke-width="2.3" />
           阅读
         </button>
-        <button :class="{ active: mode === 'studio' }" type="button" @click="mode = 'studio'">
+        <button :class="{ active: mode === 'studio' }" type="button" @click="setMode('studio')">
           <Palette :size="18" stroke-width="2.3" />
           画板
         </button>
@@ -67,10 +71,7 @@ async function handleSave(page) {
 
     <p class="live-status" aria-live="polite">{{ status }}</p>
 
-    <div v-if="mode === 'read'" id="home" class="journal-overview">
-      <JournalBook :pages="pages" @open-studio="mode = 'studio'" />
-      <StudioCanvas class="studio-preview" @save-page="handleSave" @close="mode = 'read'" />
-    </div>
-    <StudioCanvas v-else class="studio-focus" @save-page="handleSave" @close="mode = 'read'" />
+    <JournalBook v-if="mode === 'read'" id="home" :pages="pages" @open-studio="setMode('studio')" />
+    <StudioCanvas v-else class="studio-focus" @save-page="handleSave" @close="setMode('read')" />
   </main>
 </template>

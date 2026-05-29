@@ -18,7 +18,14 @@ const turning = ref(false);
 const total = computed(() => props.pages.length);
 const leftPage = computed(() => props.pages[spreadStart.value]);
 const rightPage = computed(() => props.pages[spreadStart.value + 1]);
-const mobilePage = computed(() => (leftPage.value?.kind === "toc" ? rightPage.value || leftPage.value : leftPage.value));
+const bookmarkItems = computed(() =>
+  [
+    { title: "My Journal", index: 0 },
+    { title: "目录", index: 1 },
+    { title: "窗边的早晨", index: 2 },
+    { title: "散步路线", index: 3 }
+  ].filter((item) => item.index < total.value)
+);
 const edgeTabs = ["About Me", "Daydreams", "Travels", "Little Things"];
 
 function flip(direction) {
@@ -38,17 +45,15 @@ function jumpTo(index) {
 
 <template>
   <section class="reader-stage" aria-label="手账阅读器">
-    <p class="scene-note scene-note-left">desktop<br />open book<br />reading view</p>
-
     <aside class="bookmark-stack" aria-label="目录书签">
       <button
-        v-for="(page, index) in pages.slice(0, 5)"
-        :key="page.id"
+        v-for="item in bookmarkItems"
+        :key="item.title"
         type="button"
-        :class="{ active: index === spreadStart || index === spreadStart + 1 }"
-        @click="jumpTo(index)"
+        :class="{ active: item.index === spreadStart || item.index === spreadStart + 1 }"
+        @click="jumpTo(item.index)"
       >
-        <span>{{ page.title }}</span>
+        <span>{{ item.title }}</span>
       </button>
     </aside>
 
@@ -87,22 +92,9 @@ function jumpTo(index) {
       </button>
     </div>
 
-    <aside class="mobile-side" aria-label="移动端单页预览">
-      <div class="phone-preview">
-        <div class="phone-speaker" aria-hidden="true"></div>
-        <BookPage :page="mobilePage" side="mobile" compact />
-        <div class="phone-controls" aria-hidden="true">
-          <span>‹</span>
-          <span>{{ spreadStart + 1 }} / {{ total }}</span>
-          <span>›</span>
-        </div>
-      </div>
-      <p class="scene-note scene-note-right">mobile<br />one page<br />view</p>
-      <div class="washi-roll" aria-hidden="true"></div>
-      <button class="studio-ticket" type="button" @click="$emit('open-studio')">
-        <PenLine :size="18" />
-        写一页
-      </button>
-    </aside>
+    <button class="studio-ticket reader-studio-ticket" type="button" @click="$emit('open-studio')">
+      <PenLine :size="18" />
+      写一页
+    </button>
   </section>
 </template>

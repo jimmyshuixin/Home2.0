@@ -55,25 +55,35 @@ export const seedPages = [
     date: "05.30",
     mood: "微风",
     excerpt: "路边的小店、便利贴一样的云，还有突然想记下来的句子。",
+    image: "/images/coastal-road-journal.png",
     elements: [
       {
         id: "walk-note",
         type: "text",
-        text: "大众能看懂，也能感觉到一点私人生活的温度。",
-        x: 16,
-        y: 22,
-        width: 52,
+        text: "收集瞬间，不收集事情。",
+        x: 13,
+        y: 66,
+        width: 36,
         rotate: 2,
         color: "#2c312e"
       },
       {
         id: "walk-sticker",
         type: "sticker",
-        text: "today",
-        x: 64,
-        y: 55,
-        width: 20,
+        text: "keep going",
+        x: 66,
+        y: 72,
+        width: 18,
         rotate: -8,
+        color: "coral"
+      },
+      {
+        id: "walk-tape",
+        type: "tape",
+        x: 50,
+        y: 10,
+        width: 22,
+        rotate: -5,
         color: "coral"
       }
     ]
