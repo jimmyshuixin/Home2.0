@@ -1,0 +1,23 @@
+[
+  {
+    "name": "狐妖小红娘-梦回还",
+    "artist": "呦猫UNEKO",
+    "url": "./content/music/狐妖小红娘-梦回还.mp3",
+    "cover": "./content/music/狐妖小红娘-梦回还.jpg",
+    "lrc": ""
+  },
+  {
+    "name": "神奇阿呦-我和你",
+    "artist": "唐宁",
+    "url": "./content/music/神奇阿呦-我和你.mp3",
+    "cover": "./content/music/神奇阿呦-我和你.jpg",
+    "lrc": ""
+  },
+  {
+    "name": "熊出没-你从未离去",
+    "artist": "白挺",
+    "url": "./content/music/熊出没-你从未离去.mp3",
+    "cover": "./content/music/熊出没-你从未离去.jpg",
+    "lrc": ""
+  }
+]

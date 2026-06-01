@@ -1,0 +1,26 @@
+{
+  "name": "虚宁",
+  "phone": "******",
+  "email": "******",
+  "location": "合肥",
+  "politicalStatus": "******",
+  "education": [
+    {
+      "institution": "中国科学技术大学",
+      "major": "能源动力",
+      "duration": "2026.09 - 2028.06",
+      "courses": {
+        "major": [],
+        "minor": []
+      }
+    }
+  ],
+  "projects": [],
+  "campusExperience": [],
+  "skills": [],
+  "honors": []
+}
+
+
+
+

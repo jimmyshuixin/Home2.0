@@ -1,0 +1,52 @@
+[
+  {
+    "title": "白色橄榄树",
+    "author": "玖月晞",
+    "coverUrl": "./content/bookshelf/白色橄榄树.jpg",
+    "url": "https://book.douban.com/subject/33401169/",
+    "category": "文学",
+    "status": "read",
+    "rating": 5,
+    "review": "我不是看了本书。而是经历了一段感情。",
+    "startDate": "2022-11-15",
+    "finishDate": "2022-12-31"
+  },
+  {
+    "title": "天蓝色的彼岸",
+    "author": "[英] 亚历克斯·希勒",
+    "coverUrl": "./content/bookshelf/天蓝色的彼岸.jpg",
+    "url": "https://book.douban.com/subject/30421137/",
+    "category": "文学",
+    "status": "read",
+    "rating": 5,
+    "review": "",
+    "startDate": "2025-06-09",
+    "finishDate": "2025-09-06"
+  },
+  {
+    "title": "小王子",
+    "author": "[法] 圣埃克苏佩里",
+    "coverUrl": "./content/bookshelf/小王子.jpg",
+    "url": "https://book.douban.com/subject/1084336/",
+    "category": "文学",
+    "status": "read",
+    "rating": 5,
+    "review": "",
+    "startDate": "2023-11-20",
+    "finishDate": "2023-11-28"
+  },
+  {
+    "title": "乌合之众",
+    "author": "[法] 古斯塔夫·勒庞",
+    "coverUrl": "./content/bookshelf/乌合之众.jpg",
+    "url": "https://book.douban.com/subject/1012611/",
+    "category": "心理学",
+    "status": "read",
+    "rating": 5,
+    "review": "",
+    "startDate": "2024-12-01",
+    "finishDate": "2024-12-15"
+  }
+]
+
+
