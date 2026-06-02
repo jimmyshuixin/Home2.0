@@ -1,0 +1,26 @@
+{
+  "name": "home-v3-field-notebook",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/copy-static.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "dev:music": "wrangler dev --config wrangler.music.jsonc",
+    "deploy:music": "wrangler deploy --config wrangler.music.jsonc",
+    "check:music": "wrangler deploy --config wrangler.music.jsonc --dry-run",
+    "smoke:music": "node scripts/check-music-worker.mjs"
+  },
+  "dependencies": {
+    "@meting/core": "^1.6.1",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "lucide-vue-next": "^0.468.0",
+    "vite": "^7.2.4",
+    "vue": "^3.5.25"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.60.0",
+    "wrangler": "^4.95.0"
+  }
+}

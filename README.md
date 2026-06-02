@@ -35,8 +35,8 @@
 
 2.  **`music-proxy.js` (音乐 API 代理)**:
 
-      - **功能**: Meting API 的高可用反向代理。
-      - **用途**: 解决前端直接调用音乐 API 时遇到的 CORS 跨域限制。
+      - **功能**: 基于 `@meting/core` 的 Cloudflare Worker 音乐 API。
+      - **用途**: 直接在 Worker 中调用 Meting Node.js 版，返回前端播放器可直接消费的歌单、封面和播放 URL，同时处理 CORS、参数校验与边缘缓存。
 
 3.  **`github-proxy.js` (GitHub API 代理)**:
 
@@ -146,12 +146,66 @@ cd YOUR_REPO
 4.  部署成功后，你会得到一个 URL，例如 `source-proxy.yourname.workers.dev`。
 5.  **重要**: 回到 `index.html`，使用“查找并替换”功能，将所有 `https://source.xvyin.com` 替换为你刚刚获取的 Worker URL。
 
-#### 部署 `music-proxy.js` (音乐代理)
+#### 部署 `music-proxy.js` (Meting 音乐 API)
 
-1.  重复上述创建 Worker 的步骤，命名为 `music-proxy`。
-2.  将 `worker/music-proxy.js` 的代码部署上去。
-3.  获取其 URL，例如 `music-proxy.yourname.workers.dev`。
-4.  在 `index.html` 的 `config` 对象中，将 `music.api` 的值修改为你的 Worker URL (记得保留末尾的 `/`)。
+当前 `metowolf/Meting` 的 npm 包 `@meting/core` 是 Node.js 版，不是静态页面。它可以部署到 Cloudflare Workers，但需要通过 Wrangler 打包，并开启 `nodejs_compat`。
+
+1.  安装依赖后先做一次本地构建检查：
+
+    ```bash
+    npm install
+    npm run smoke:music
+    npm run check:music
+    ```
+
+2.  如需限制跨域来源，编辑 `wrangler.music.jsonc` 中的 `ALLOWED_ORIGINS`，例如 `https://xvyin.com`。默认 `*` 适合公开音乐 API。
+3.  如果某个平台需要 Cookie，在 Cloudflare 中用 Secret 保存，不要写进代码：
+
+    ```bash
+    npx wrangler secret put METING_COOKIE_TENCENT --config wrangler.music.jsonc
+    ```
+
+    腾讯音乐在无登录 Cookie 时经常只能返回歌单元数据，无法解析播放 URL。此时 Worker 会返回 502，并提示配置 `METING_COOKIE_TENCENT`；前端播放器会自动切换到本地备用歌单。
+
+4.  部署 Worker：
+
+    ```bash
+    npm run deploy:music
+    ```
+
+5.  如果在本地或 Codex 这类非交互环境部署，需要先提供 Cloudflare API Token：
+
+    ```powershell
+    $env:CLOUDFLARE_API_TOKEN="你的 Cloudflare API Token"
+    $env:CLOUDFLARE_ACCOUNT_ID="你的 Cloudflare Account ID"
+    npm run deploy:music
+    ```
+
+    也可以在 GitHub 仓库的 **Settings > Secrets and variables > Actions** 中添加 `CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID`，然后手动运行 `.github/workflows/deploy-music-api.yml`。
+
+6.  部署后得到的 URL 形如 `https://home-music-api.yourname.workers.dev/`。本项目当前已部署到 `https://home-music-api.jimmyai3132.workers.dev/`，并已通过 Cloudflare Custom Domain 绑定到 `https://music.xvyin.com/`。在 Cloudflare Pages 的环境变量里设置：
+
+    ```bash
+    VITE_MUSIC_API_URL=https://music.xvyin.com/
+    VITE_MUSIC_SERVER=tencent
+    VITE_MUSIC_TYPE=playlist
+    VITE_MUSIC_PLAYLIST_ID=9206816111
+    VITE_MUSIC_LIMIT=18
+    ```
+
+    前端会调用 `?server=tencent&type=playlist&id=9206816111&limit=18`，API 失败时自动回退到 `content/music/music.json` 的本地歌单。
+
+7.  部署后先访问健康检查端点，确认 Worker 本身已经在线：
+
+    ```bash
+    curl https://music.xvyin.com/health
+    ```
+
+    再测试歌单接口：
+
+    ```bash
+    curl "https://music.xvyin.com/?server=tencent&type=playlist&id=9206816111&limit=1"
+    ```
 
 #### 部署 `github-proxy.js` (GitHub 代理)
 
