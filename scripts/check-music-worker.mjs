@@ -45,6 +45,22 @@ const cover = await call('/?server=tencent&type=pic&id=000MkMni19ClKG');
 assert(cover.status === 200, `Expected cover smoke test to return 200, got ${cover.status}`);
 assert(cover.body?.url?.startsWith('https://'), 'Expected cover smoke test to return a cover URL');
 
+const playlist = await call('/?server=tencent&type=playlist&id=9206816111&limit=1');
+assert(playlist.status === 200, `Expected playlist smoke test to return 200, got ${playlist.status}`);
+assert(Array.isArray(playlist.body), 'Expected playlist smoke test to return a song array');
+assert(playlist.body[0]?.url?.startsWith('https://'), 'Expected playlist song to include a playable URL endpoint');
+assert(playlist.body[0]?.url?.includes('type=url'), 'Expected playlist song URL to defer audio resolution through Meting');
+assert(playlist.body.length === 1, `Expected limit=1 playlist smoke test to return 1 song, got ${playlist.body.length}`);
+
+const fullPlaylist = await call('/?server=tencent&type=playlist&id=9206816111&limit=all');
+assert(fullPlaylist.status === 200, `Expected full playlist smoke test to return 200, got ${fullPlaylist.status}`);
+assert(Array.isArray(fullPlaylist.body), 'Expected full playlist smoke test to return a song array');
+assert(fullPlaylist.body.length > 18, `Expected full playlist to include more than 18 songs, got ${fullPlaylist.body.length}`);
+assert(
+  fullPlaylist.body.every((song) => song?.url?.startsWith('https://') && song.url.includes('type=url')),
+  'Expected every full playlist song to include a playable URL endpoint',
+);
+
 const invalid = await call('/?server=bad&type=playlist&id=1');
 assert(invalid.status === 400, `Expected invalid server to return 400, got ${invalid.status}`);
 assert(String(invalid.body?.error || '').includes('Unsupported music server'), 'Expected invalid server error message');
@@ -62,6 +78,9 @@ console.log(
       checks: {
         health: health.status,
         cover: cover.status,
+        playlist: playlist.status,
+        fullPlaylist: fullPlaylist.status,
+        fullPlaylistCount: fullPlaylist.body.length,
         invalidServer: invalid.status,
         missingQrCheck: missingQrCheck.status,
         anonymousSession: anonymousSession.status,

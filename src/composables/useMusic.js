@@ -1,13 +1,15 @@
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { fallbackMusicList, siteConfig } from '../data/site';
 
 const PLAY_MODE_KEY = 'home-music-play-mode';
 const PLAYLIST_KEY = 'home-music-selected-playlist';
 const SESSION_KEY = 'home-music-session';
 const PLAYLIST_CACHE_PREFIX = 'home-music-playlist:';
+const PLAYLIST_CACHE_VERSION = 'full-playlist-v1';
 const LOGIN_SUCCESS_CODE = 803;
 const LOGIN_EXPIRED_CODE = 800;
 const LOGIN_POLL_MS = 2400;
+const ACCOUNT_PLAYLIST_LIMIT = 50;
 
 const normalizePath = (value) => {
   if (typeof value !== 'string') return '';
@@ -18,6 +20,8 @@ const normalizePath = (value) => {
 const normalizeSong = (song = {}) => {
   const artist = Array.isArray(song.artist) ? song.artist.join(' / ') : song.artist || song.author || 'Unknown Artist';
   const url = normalizePath(song.url || song.src || song.link);
+  const rawLrc = song.lrc || song.lyric || '';
+  const lrcUrl = normalizePath(song.lrcUrl || song.lyricUrl || (/^https?:/i.test(rawLrc) ? rawLrc : ''));
 
   return {
     id: song.id || song.url_id || song.mid || song.name || '',
@@ -29,7 +33,8 @@ const normalizeSong = (song = {}) => {
     playable: 'playable' in song ? Boolean(song.playable) : Boolean(url),
     playError: song.playError || song.message || '',
     cover: normalizePath(song.cover || song.pic || song.picture || song.image) || '/content/icon/32.png',
-    lrc: song.lrc || song.lyric || '',
+    lrc: lrcUrl && rawLrc === lrcUrl ? '' : rawLrc,
+    lrcUrl,
   };
 };
 
@@ -41,6 +46,11 @@ const safeJsonParse = (value, fallback = null) => {
   } catch {
     return fallback;
   }
+};
+
+const safeMediaTime = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
 };
 
 const remotePlaylistOptions = siteConfig.music.playlists.map((playlist) => ({
@@ -70,6 +80,21 @@ const defaultPlaylist = remotePlaylistOptions[0] || {
 };
 
 const playlistOptions = [defaultPlaylist, ...remotePlaylistOptions.slice(1), ...localPlaylistOptions];
+
+const normalizeAccountPlaylistOption = (playlist = {}, server = siteConfig.music.server) => {
+  const id = String(playlist.id || playlist.dissid || playlist.dirid || '').trim();
+  if (!id) return null;
+
+  return {
+    key: `${server}:playlist:${id}`,
+    id,
+    name: playlist.name || playlist.diss_name || playlist.dissname || `QQ Playlist ${id}`,
+    server,
+    type: 'playlist',
+    source: 'account',
+    songCount: Number(playlist.song_count || playlist.songnum || 0),
+  };
+};
 
 const readCachedPlaylist = (cacheKey) => {
   try {
@@ -172,7 +197,7 @@ export function useMusic() {
       url.searchParams.set('server', playlistItem.server || siteConfig.music.server);
       url.searchParams.set('type', playlistItem.type || siteConfig.music.type);
       url.searchParams.set('id', playlistItem.id);
-      url.searchParams.set('limit', String(siteConfig.music.limit || 18));
+      url.searchParams.set('limit', String(siteConfig.music.limit || 'all'));
       url.searchParams.set('lyric', '1');
       return url.toString();
     } catch {
@@ -208,6 +233,20 @@ export function useMusic() {
       }
 
       return data;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  };
+
+  const fetchText = async (url) => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), siteConfig.music.timeoutMs);
+
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`Music text request failed: ${response.status}`);
+      return text;
     } finally {
       window.clearTimeout(timeoutId);
     }
@@ -280,6 +319,27 @@ export function useMusic() {
     return true;
   };
 
+  const loadLyricsForCurrentSong = async () => {
+    const song = currentSong.value;
+    if (!song?.lrcUrl || song.lrc) return false;
+
+    const songIndex = state.index;
+    const songId = song.id;
+
+    try {
+      const lrc = await fetchText(song.lrcUrl);
+      if (!String(lrc).trim()) return false;
+
+      const current = playlist.value[songIndex];
+      if (!current || current.id !== songId) return false;
+
+      playlist.value.splice(songIndex, 1, { ...current, lrc });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const fallbackToLocal = async (message) => {
     await applyPlaylist(fallbackMusicList.map(normalizeSong), 'local', false);
     state.error = message;
@@ -289,7 +349,7 @@ export function useMusic() {
     const apiUrl = buildMusicApiUrl(playlistItem);
     if (!apiUrl) return false;
 
-    const cacheKey = `${playlistItem.key}:${state.sessionToken ? 'auth' : 'public'}`;
+    const cacheKey = `${PLAYLIST_CACHE_VERSION}:${playlistItem.key}:${state.sessionToken ? 'auth' : 'public'}`;
     if (!force && !state.sessionToken) {
       const cached = readCachedPlaylist(cacheKey);
       if (cached?.length && (await applyPlaylist(cached, 'api-cache', false))) return true;
@@ -375,6 +435,44 @@ export function useMusic() {
     return await switchPlaylist(customPlaylist.key, { force: true });
   };
 
+  const loadAccountPlaylists = async ({ switchToFirst = false } = {}) => {
+    if (!state.sessionToken) return [];
+
+    const server = state.loginServer || siteConfig.music.server;
+    state.loginMessage = 'Loading account playlists...';
+
+    try {
+      const data = await fetchJson(buildMusicEndpoint('/me/playlists', {
+        server,
+        limit: ACCOUNT_PLAYLIST_LIMIT,
+      }));
+      const accountPlaylists = (Array.isArray(data.playlists) ? data.playlists : [])
+        .map((item) => normalizeAccountPlaylistOption(item, data.server || data.platform || server))
+        .filter(Boolean);
+
+      if (!accountPlaylists.length) {
+        state.loginMessage = 'Login active, but no account playlists were returned.';
+        return [];
+      }
+
+      const merged = new Map(playlists.value.map((item) => [item.key, item]));
+      accountPlaylists.forEach((item) => {
+        merged.set(item.key, { ...merged.get(item.key), ...item });
+      });
+      playlists.value = Array.from(merged.values());
+      state.loginMessage = `Loaded ${accountPlaylists.length} QQ Music playlist${accountPlaylists.length > 1 ? 's' : ''}.`;
+
+      if (switchToFirst) {
+        await switchPlaylist(accountPlaylists[0].key, { force: true });
+      }
+
+      return accountPlaylists;
+    } catch (error) {
+      state.loginMessage = error?.message || 'Could not load account playlists.';
+      return [];
+    }
+  };
+
   const refreshPlaylist = async () => {
     if (!selectedPlaylist.value) return false;
 
@@ -392,14 +490,14 @@ export function useMusic() {
       audio.value = new Audio();
       audio.value.preload = 'metadata';
       audio.value.addEventListener('timeupdate', () => {
-        state.currentTime = audio.value.currentTime || 0;
-        state.duration = audio.value.duration || 0;
+        state.currentTime = safeMediaTime(audio.value.currentTime);
+        state.duration = safeMediaTime(audio.value.duration);
       });
       audio.value.addEventListener('loadedmetadata', () => {
-        state.duration = audio.value.duration || 0;
+        state.duration = safeMediaTime(audio.value.duration);
       });
       audio.value.addEventListener('durationchange', () => {
-        state.duration = audio.value.duration || 0;
+        state.duration = safeMediaTime(audio.value.duration);
       });
       audio.value.addEventListener('play', () => {
         state.isPlaying = true;
@@ -408,12 +506,12 @@ export function useMusic() {
         state.isPlaying = false;
       });
       audio.value.addEventListener('ended', () => {
-        nextSong();
+        nextSong(true);
       });
       audio.value.addEventListener('error', () => {
         state.isPlaying = false;
         state.error = 'This track could not be played. Skipping to the next song.';
-        nextSong();
+        nextSong(true);
       });
     }
 
@@ -433,16 +531,51 @@ export function useMusic() {
     await setAudioSource(true);
   };
 
-  function nextSong() {
-    if (!playlist.value.length) return;
+  function nextSong(shouldPlay = state.isPlaying) {
+    if (!playlist.value.length) return Promise.resolve(false);
     state.index = getNextIndex(1);
-    setAudioSource(state.isPlaying);
+    return setAudioSource(shouldPlay);
   }
 
   const previousSong = () => {
     if (!playlist.value.length) return;
     state.index = getNextIndex(-1);
     setAudioSource(state.isPlaying);
+  };
+
+  const selectTrack = async (index) => {
+    const nextIndex = Number(index);
+    if (!Number.isInteger(nextIndex) || nextIndex < 0 || nextIndex >= playlist.value.length || state.isLoading) {
+      return false;
+    }
+
+    const nextTrack = playlist.value[nextIndex];
+    if (!nextTrack?.url) {
+      state.index = nextIndex;
+      state.isPlaying = false;
+      state.error = nextTrack?.playError || 'This track does not have a playable URL.';
+      return false;
+    }
+
+    state.index = nextIndex;
+    state.error = '';
+    await setAudioSource(state.isPlaying);
+    return true;
+  };
+
+  const seekTo = async (time) => {
+    const nextTime = Number(time);
+    if (!Number.isFinite(nextTime) || nextTime < 0 || !currentSong.value.url) return false;
+
+    await setAudioSource(false);
+    const player = ensureAudio();
+    if (!player) return false;
+
+    const duration = safeMediaTime(player.duration || state.duration);
+    const boundedTime = duration ? Math.min(nextTime, duration) : nextTime;
+    player.currentTime = boundedTime;
+    state.currentTime = boundedTime;
+    return true;
   };
 
   const togglePlayMode = () => {
@@ -517,8 +650,9 @@ export function useMusic() {
 
         saveSession(data.session, data.expiresAt);
         state.isLoginOpen = false;
-        state.loginMessage = 'Login successful. Refreshing playlist...';
-        await refreshPlaylist();
+        state.loginMessage = 'Login successful. Loading account playlists...';
+        const accountPlaylists = await loadAccountPlaylists({ switchToFirst: true });
+        if (!accountPlaylists.length) await refreshPlaylist();
         return;
       }
 
@@ -583,30 +717,45 @@ export function useMusic() {
 
   const progressText = computed(() => {
     const fmt = (value) => {
-      const minutes = Math.floor(value / 60) || 0;
-      const seconds = Math.floor(value % 60).toString().padStart(2, '0');
+      const safeValue = safeMediaTime(value);
+      const minutes = Math.floor(safeValue / 60);
+      const seconds = Math.floor(safeValue % 60).toString().padStart(2, '0');
       return `${minutes}:${seconds}`;
     };
-    return `${fmt(state.currentTime)} / ${fmt(state.duration || 0)}`;
+    return `${fmt(state.currentTime)} / ${fmt(state.duration)}`;
   });
 
   onMounted(async () => {
+    let storedPlaylistKey = '';
+
     try {
       const storedMode = localStorage.getItem(PLAY_MODE_KEY);
       if (storedMode === 'random' || storedMode === 'order') state.playMode = storedMode;
 
-      const storedPlaylist = localStorage.getItem(PLAYLIST_KEY);
-      if (storedPlaylist && playlists.value.some((item) => item.key === storedPlaylist)) {
-        state.selectedPlaylistKey = storedPlaylist;
-        state.selectedPlaylistName = playlists.value.find((item) => item.key === storedPlaylist)?.name || defaultPlaylist.name;
+      storedPlaylistKey = localStorage.getItem(PLAYLIST_KEY) || '';
+      if (storedPlaylistKey && playlists.value.some((item) => item.key === storedPlaylistKey)) {
+        state.selectedPlaylistKey = storedPlaylistKey;
+        state.selectedPlaylistName = playlists.value.find((item) => item.key === storedPlaylistKey)?.name || defaultPlaylist.name;
       }
     } catch {
       // Ignore storage failures.
     }
 
     restoreSession();
+    if (state.isLoggedIn) await loadAccountPlaylists();
+    if (storedPlaylistKey && playlists.value.some((item) => item.key === storedPlaylistKey)) {
+      state.selectedPlaylistKey = storedPlaylistKey;
+      state.selectedPlaylistName = playlists.value.find((item) => item.key === storedPlaylistKey)?.name || defaultPlaylist.name;
+    }
     await switchPlaylist(state.selectedPlaylistKey);
   });
+
+  watch(
+    () => [state.index, currentSong.value?.lrcUrl, currentSong.value?.lrc],
+    () => {
+      loadLyricsForCurrentSong();
+    },
+  );
 
   onBeforeUnmount(() => {
     clearLoginPoll();
@@ -628,11 +777,14 @@ export function useMusic() {
     togglePlay,
     nextSong,
     previousSong,
+    selectTrack,
+    seekTo,
     togglePlayMode,
     switchPlaylist,
     refreshPlaylist,
     loadPlaylistFromApi,
     loadCustomPlaylist,
+    loadAccountPlaylists,
     startQrLogin,
     cancelQrLogin,
     logoutMusic,

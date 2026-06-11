@@ -3,12 +3,12 @@ import { onMounted, onUnmounted, ref } from 'vue';
 export function useScrollState() {
   const progress = ref(0);
   const showBackToTop = ref(false);
-  const activeSection = ref('story');
+  const activeSection = ref('recent');
   const isNavHidden = ref(false);
   let ticking = false;
   let lastScroll = 0;
 
-  const sections = ['story', 'growth', 'life', 'tech', 'future', 'contact'];
+  const sections = ['recent', 'tech', 'contact'];
 
   const update = () => {
     const top = window.scrollY || 0;

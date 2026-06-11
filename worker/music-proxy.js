@@ -3,17 +3,36 @@ import Meting from '../Meting/src/meting.js';
 const DEFAULT_SERVER = 'tencent';
 const DEFAULT_TYPE = 'playlist';
 const DEFAULT_PLAYLIST_ID = '9206816111';
-const DEFAULT_LIMIT = 18;
-const HARD_MAX_LIMIT = 50;
+const DEFAULT_LIMIT = 'all';
+const HARD_MAX_LIMIT = 500;
+const DEFAULT_QUERY_LIMIT = 50;
 const DEFAULT_CACHE_TTL = 60 * 20;
 const DEFAULT_SESSION_TTL = 60 * 60 * 24 * 7;
 const DEFAULT_BITRATE = 320;
 const DEFAULT_COVER_SIZE = 300;
 const DEFAULT_CONCURRENCY = 3;
-const TOKEN_PREFIX = 'meting-session.v1.';
+const DEFAULT_MEDIA_MODE = 'deferred';
+const DEFAULT_MEDIA_URL_BASE = 'https://api.injahow.cn/meting/';
+const TOKEN_PREFIX_V1 = 'meting-session.v1.';
+const TOKEN_PREFIX_V2 = 'meting-session.v2.';
+const DEFERRED_MEDIA_SERVERS = new Set(['tencent']);
+const UPSTREAM_SONG_TYPES = new Set(['playlist', 'song', 'album', 'artist', 'search']);
 
 const SUPPORTED_SERVERS = new Set(Meting.getSupportedPlatforms());
-const SUPPORTED_TYPES = new Set(['playlist', 'song', 'album', 'artist', 'search', 'url', 'pic', 'lyric', 'lrc']);
+const SUPPORTED_TYPES = new Set([
+  'playlist',
+  'song',
+  'album',
+  'artist',
+  'search',
+  'url',
+  'pic',
+  'lyric',
+  'lrc',
+  'user_playlists',
+  'user-playlists',
+  'playlists',
+]);
 const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_.:-]+$/;
 const METING_VERSION = new Meting(DEFAULT_SERVER).VERSION || 'unknown';
 
@@ -38,7 +57,7 @@ export default {
           jsonResponse(
             {
               ok: true,
-              service: 'home-music-api',
+              service: env.WORKER_SERVICE_NAME || 'home-music-api',
               metingVersion: METING_VERSION,
               supportedServers: [...SUPPORTED_SERVERS],
               defaultServer: env.METING_DEFAULT_SERVER || DEFAULT_SERVER,
@@ -65,6 +84,10 @@ export default {
 
       if (url.pathname === '/session/status') {
         return maybeHead(request, await handleSessionStatus(request, env, cors));
+      }
+
+      if (url.pathname === '/me/playlists' || url.pathname === '/user/playlists') {
+        return maybeHead(request, await handleUserPlaylists(request, env, cors));
       }
 
       const params = readParams(request, env);
@@ -155,6 +178,17 @@ async function handleSessionStatus(request, env, cors) {
   );
 }
 
+async function handleUserPlaylists(request, env, cors) {
+  const url = new URL(request.url);
+  const server = readServer(url.searchParams.get('server') || url.searchParams.get('platform'), env);
+  const limit = clampNumber(url.searchParams.get('limit'), 1, 200, 200);
+  const offset = clampNumber(url.searchParams.get('offset'), 0, 5000, 0);
+  const sessionCookie = await readSessionCookie(readSessionTokenFromRequest(request), server, env);
+  const payload = await resolveUserPlaylists(server, env, sessionCookie, { limit, offset });
+
+  return jsonResponse(payload, 200, cors, { 'Cache-Control': 'private, no-store' });
+}
+
 function createCorsHeaders(request, env) {
   const origin = request.headers.get('Origin') || '';
   const allowedOrigins = String(env.ALLOWED_ORIGINS || '*')
@@ -191,20 +225,22 @@ function readParams(request, env) {
     throw httpError(400, 'The id contains unsupported characters');
   }
 
-  const maxLimit = clampNumber(env.METING_MAX_LIMIT, 1, HARD_MAX_LIMIT, HARD_MAX_LIMIT);
+  const limit = readLimit(url.searchParams.get('limit'), env);
 
   return {
     server,
     type,
     id,
     page: clampNumber(url.searchParams.get('page'), 1, 100, 1),
-    limit: clampNumber(url.searchParams.get('limit') || env.METING_DEFAULT_LIMIT, 1, maxLimit, DEFAULT_LIMIT),
+    limit: limit.value,
+    limitAll: limit.all,
     bitrate: clampNumber(url.searchParams.get('br') || env.METING_BITRATE, 64, 999, DEFAULT_BITRATE),
     coverSize: clampNumber(url.searchParams.get('cover') || env.METING_COVER_SIZE, 100, 1000, DEFAULT_COVER_SIZE),
     concurrency: clampNumber(env.METING_CONCURRENCY, 1, 5, DEFAULT_CONCURRENCY),
     includeLyric: url.searchParams.get('lyric') === '1' || url.searchParams.get('lrc') === '1',
     sessionToken: readSessionTokenFromRequest(request),
     cacheTtl: clampNumber(env.METING_CACHE_TTL, 0, 86400, DEFAULT_CACHE_TTL),
+    deferMedia: shouldDeferMedia(server, env),
   };
 }
 
@@ -222,6 +258,17 @@ async function resolveMusic(params, env) {
   const sessionCookie = await readSessionCookie(params.sessionToken, params.server, env);
   const meting = createMeting(params.server, env, sessionCookie);
 
+  if (params.type === 'user_playlists' || params.type === 'user-playlists' || params.type === 'playlists') {
+    return await resolveUserPlaylists(params.server, env, sessionCookie, {
+      limit: params.limitAll ? 200 : params.limit,
+      offset: 0,
+    });
+  }
+
+  if (params.deferMedia && !sessionCookie && UPSTREAM_SONG_TYPES.has(params.type)) {
+    return await resolveUpstreamSongs(params, env);
+  }
+
   if (params.type === 'url') {
     return parseMetingJson(await meting.url(params.id, params.bitrate), {});
   }
@@ -235,23 +282,74 @@ async function resolveMusic(params, env) {
   }
 
   const rawSongs = await getSongRecords(meting, params);
+
+  if (!rawSongs.length && params.deferMedia && UPSTREAM_SONG_TYPES.has(params.type)) {
+    return await resolveUpstreamSongs(params, env);
+  }
+
   const songs = await enrichSongs(rawSongs, params, env, sessionCookie);
 
   return songs;
 }
 
+async function resolveUpstreamSongs(params, env) {
+  const query = {
+    server: params.server,
+    type: params.type,
+    id: params.id,
+    page: params.page,
+  };
+
+  if (!params.limitAll) {
+    query.limit = params.limit;
+  }
+
+  const response = await fetch(
+    buildMediaEndpoint(env, query),
+    { headers: { Accept: 'application/json' } },
+  );
+  const payload = parseMetingJson(await response.text(), []);
+
+  if (!response.ok) {
+    throw httpError(response.status, payload?.error || payload?.message || 'Upstream music API error');
+  }
+
+  return limitSongs((Array.isArray(payload) ? payload : [payload]).filter(Boolean), params);
+}
+
+async function resolveUserPlaylists(server, env, sessionCookie, option = {}) {
+  const meting = createMeting(server, env, sessionCookie);
+  const cookie = sessionCookie || env[`METING_COOKIE_${server.toUpperCase()}`] || env.METING_COOKIE || '';
+
+  if (!cookie) {
+    throw httpError(401, 'Login session is required to read user playlists');
+  }
+
+  return parseMetingJson(await meting.userPlaylists(null, option), {
+    code: -1,
+    server,
+    platform: server,
+    playlists: [],
+  });
+}
+
 async function getSongRecords(meting, params) {
+  const queryLimit = params.limitAll ? DEFAULT_QUERY_LIMIT : params.limit;
   const methods = {
     playlist: () => meting.playlist(params.id),
     song: () => meting.song(params.id),
     album: () => meting.album(params.id),
-    artist: () => meting.artist(params.id, params.limit),
-    search: () => meting.search(params.id, { page: params.page, limit: params.limit }),
+    artist: () => meting.artist(params.id, queryLimit),
+    search: () => meting.search(params.id, { page: params.page, limit: queryLimit }),
   };
 
   const result = await methods[params.type]();
   const parsed = parseMetingJson(result, []);
-  return (Array.isArray(parsed) ? parsed : [parsed]).slice(0, params.limit);
+  return limitSongs(Array.isArray(parsed) ? parsed : [parsed], params);
+}
+
+function limitSongs(songs, params) {
+  return params.limitAll ? songs : songs.slice(0, params.limit);
 }
 
 async function enrichSongs(songs, params, env, sessionCookie) {
@@ -276,6 +374,10 @@ async function enrichSongs(songs, params, env, sessionCookie) {
 async function enrichSong(song, params, env, sessionCookie) {
   const id = song.url_id || song.id;
   if (!id) return null;
+
+  if (params.deferMedia) {
+    return await enrichDeferredSong(song, params, env, sessionCookie);
+  }
 
   const meting = createMeting(params.server, env, sessionCookie);
   const [urlInfo, picInfo, lyricInfo] = await Promise.all([
@@ -313,6 +415,78 @@ async function enrichSong(song, params, env, sessionCookie) {
   };
 }
 
+async function enrichDeferredSong(song, params, env, sessionCookie) {
+  const id = song.url_id || song.id;
+  const picId = song.pic_id || song.id;
+  const lyricId = song.lyric_id || song.id;
+  const cover = buildMediaEndpoint(env, {
+    server: params.server,
+    type: 'pic',
+    id: picId,
+    cover: params.coverSize,
+  });
+  const lrcUrl = buildMediaEndpoint(env, {
+    server: params.server,
+    type: 'lrc',
+    id: lyricId,
+  });
+
+  return {
+    id: song.id,
+    name: song.name || 'Unknown Track',
+    artist: Array.isArray(song.artist) ? song.artist : song.artist ? [song.artist] : [],
+    album: song.album || '',
+    source: song.source || params.server,
+    url: buildMediaEndpoint(env, {
+      server: params.server,
+      type: 'url',
+      id,
+      br: params.bitrate,
+    }),
+    playable: true,
+    playError: '',
+    cover,
+    pic: cover,
+    lrc: '',
+    lyric: '',
+    lrcUrl,
+    lyricUrl: lrcUrl,
+    tlyric: '',
+    br: params.bitrate,
+  };
+}
+
+function readLimit(value, env) {
+  const raw = String(value || env.METING_DEFAULT_LIMIT || DEFAULT_LIMIT).trim().toLowerCase();
+
+  if (!raw || raw === 'all' || raw === 'full') {
+    return { value: null, all: true };
+  }
+
+  const maxLimit = clampNumber(env.METING_MAX_LIMIT, 1, HARD_MAX_LIMIT, HARD_MAX_LIMIT);
+  return {
+    value: clampNumber(raw, 1, maxLimit, DEFAULT_QUERY_LIMIT),
+    all: false,
+  };
+}
+
+function shouldDeferMedia(server, env) {
+  const mode = cleanToken(env.METING_MEDIA_MODE || DEFAULT_MEDIA_MODE);
+  return mode === 'deferred' && DEFERRED_MEDIA_SERVERS.has(server);
+}
+
+function buildMediaEndpoint(env, query) {
+  const url = new URL(String(env.METING_MEDIA_URL_BASE || DEFAULT_MEDIA_URL_BASE));
+
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
+  return url.toString();
+}
+
 function createMeting(server, env, sessionCookie = '') {
   const meting = new Meting(server);
   meting.format(true);
@@ -338,18 +512,45 @@ async function readSessionCookie(token, expectedServer, env) {
 
 async function createSessionToken(payload, env) {
   const secret = getSessionSecret(env);
-  const body = base64UrlEncode(JSON.stringify(payload));
-  const signature = await sign(body, secret);
-  return `${TOKEN_PREFIX}${body}.${signature}`;
+  const key = await getSessionEncryptionKey(secret);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = new TextEncoder().encode(JSON.stringify(payload));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+
+  return `${TOKEN_PREFIX_V2}${bytesToBase64Url(iv)}.${bytesToBase64Url(new Uint8Array(ciphertext))}`;
 }
 
 async function readSession(token, env) {
   if (!token) return null;
 
   const value = String(token).trim();
-  if (!value.startsWith(TOKEN_PREFIX)) return null;
+  if (value.startsWith(TOKEN_PREFIX_V2)) {
+    return await readEncryptedSession(value.slice(TOKEN_PREFIX_V2.length), env);
+  }
 
-  const rest = value.slice(TOKEN_PREFIX.length);
+  if (value.startsWith(TOKEN_PREFIX_V1)) {
+    return await readSignedSession(value.slice(TOKEN_PREFIX_V1.length), env);
+  }
+
+  return null;
+}
+
+async function readEncryptedSession(rest, env) {
+  const parts = rest.split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+
+  try {
+    const key = await getSessionEncryptionKey(getSessionSecret(env));
+    const iv = base64UrlToBytes(parts[0]);
+    const ciphertext = base64UrlToBytes(parts[1]);
+    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+    return validateSession(JSON.parse(new TextDecoder().decode(plaintext)));
+  } catch {
+    throw httpError(401, 'Invalid music session');
+  }
+}
+
+async function readSignedSession(rest, env) {
   const separator = rest.lastIndexOf('.');
   if (separator <= 0) return null;
 
@@ -361,7 +562,10 @@ async function readSession(token, env) {
     throw httpError(401, 'Invalid music session');
   }
 
-  const session = JSON.parse(base64UrlDecode(body));
+  return validateSession(JSON.parse(base64UrlDecode(body)));
+}
+
+function validateSession(session) {
   if (!session.cookie || !session.server || !session.expiresAt) {
     throw httpError(401, 'Invalid music session payload');
   }
@@ -371,6 +575,11 @@ async function readSession(token, env) {
   }
 
   return session;
+}
+
+async function getSessionEncryptionKey(secret) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
+  return await crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 }
 
 async function sign(value, secret) {
@@ -469,11 +678,14 @@ function base64UrlEncode(value) {
 }
 
 function base64UrlDecode(value) {
+  return new TextDecoder().decode(base64UrlToBytes(value));
+}
+
+function base64UrlToBytes(value) {
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
   const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
   const binary = atob(padded);
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
 function bytesToBase64Url(bytes) {

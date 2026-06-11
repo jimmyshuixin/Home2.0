@@ -13,11 +13,13 @@
     "METING_DEFAULT_SERVER": "tencent",
     "METING_DEFAULT_TYPE": "playlist",
     "METING_DEFAULT_ID": "9206816111",
-    "METING_DEFAULT_LIMIT": "18",
-    "METING_MAX_LIMIT": "30",
+    "METING_DEFAULT_LIMIT": "all",
+    "METING_MAX_LIMIT": "500",
     "METING_BITRATE": "320",
     "METING_COVER_SIZE": "300",
     "METING_CONCURRENCY": "3",
+    "METING_MEDIA_MODE": "deferred",
+    "METING_MEDIA_URL_BASE": "https://api.injahow.cn/meting/",
     "METING_CACHE_TTL": "1800",
     "METING_SESSION_TTL": "604800"
   }

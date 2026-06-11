@@ -1,13 +1,10 @@
 <script setup>
-import { ref, watch } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   Code2,
-  Heart,
   Menu,
   MessagesSquare,
   Moon,
-  Rocket,
-  Route,
   Sparkles,
   Sun,
   X,
@@ -22,11 +19,16 @@ const props = defineProps({
 
 const emit = defineEmits(['scroll-to', 'toggle-theme']);
 const isDrawerOpen = ref(false);
+const isDouyinOpen = ref(false);
 
-const icons = { Code2, Heart, MessagesSquare, Rocket, Route, Sparkles };
+const icons = { Code2, MessagesSquare, Sparkles };
 
 const closeDrawer = () => {
   isDrawerOpen.value = false;
+};
+
+const closeDouyin = () => {
+  isDouyinOpen.value = false;
 };
 
 const go = (id) => {
@@ -34,8 +36,21 @@ const go = (id) => {
   closeDrawer();
 };
 
-watch(isDrawerOpen, (open) => {
-  document.body.style.overflow = open ? 'hidden' : '';
+const handleEscape = (event) => {
+  if (event.key !== 'Escape') return;
+  closeDrawer();
+  closeDouyin();
+};
+
+watch([isDrawerOpen, isDouyinOpen], ([drawerOpen, douyinOpen]) => {
+  document.body.style.overflow = drawerOpen || douyinOpen ? 'hidden' : '';
+});
+
+onMounted(() => window.addEventListener('keydown', handleEscape));
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleEscape);
+  document.body.style.overflow = '';
 });
 </script>
 
@@ -48,8 +63,7 @@ watch(isDrawerOpen, (open) => {
       </button>
 
       <button class="brand-mark" type="button" @click="go('hero')" aria-label="回到顶部">
-        <span class="brand-seal">虚</span>
-        <span>
+        <span class="brand-wordmark" aria-hidden="true">
           <strong>{{ siteConfig.name }}</strong>
           <small>{{ siteConfig.englishName }}</small>
         </span>
@@ -67,12 +81,52 @@ watch(isDrawerOpen, (open) => {
         </button>
       </div>
 
-      <button class="icon-button" type="button" :aria-label="isDark ? '切换到浅色模式' : '切换到深色模式'" @click="$emit('toggle-theme')">
-        <Sun v-if="props.isDark" :size="21" />
-        <Moon v-else :size="21" />
-      </button>
+      <div class="header-actions">
+        <div class="douyin-menu desktop-only">
+          <button
+            class="icon-button"
+            type="button"
+            aria-label="查看抖音二维码"
+            aria-describedby="douyin-hover-label"
+            @click="isDouyinOpen = true"
+          >
+            <span class="douyin-mark" aria-hidden="true">抖</span>
+          </button>
+          <div class="douyin-popover" role="tooltip">
+            <img src="/content/social/douyin-qr.jpg" alt="虚宁的抖音二维码" />
+            <strong id="douyin-hover-label">抖音 · 虚宁</strong>
+            <span>扫码关注 tidingjinluo</span>
+          </div>
+        </div>
+        <button
+          class="icon-button mobile-only"
+          type="button"
+          aria-label="查看抖音二维码"
+          @click="isDouyinOpen = true"
+        >
+          <span class="douyin-mark" aria-hidden="true">抖</span>
+        </button>
+        <button class="icon-button" type="button" :aria-label="isDark ? '切换到浅色模式' : '切换到深色模式'" @click="$emit('toggle-theme')">
+          <Sun v-if="props.isDark" :size="21" />
+          <Moon v-else :size="21" />
+        </button>
+      </div>
     </nav>
   </header>
+
+  <Transition name="fade">
+    <div v-if="isDouyinOpen" class="modal-backdrop douyin-modal-backdrop" @click.self="closeDouyin">
+      <section class="douyin-modal" role="dialog" aria-modal="true" aria-labelledby="douyin-modal-title">
+        <button class="icon-button modal-close" type="button" aria-label="关闭抖音二维码" @click="closeDouyin">
+          <X :size="22" />
+        </button>
+        <p>扫码关注</p>
+        <h2 id="douyin-modal-title">虚宁的抖音</h2>
+        <img src="/content/social/douyin-qr.jpg" alt="虚宁的抖音二维码" />
+        <span>抖音号：tidingjinluo</span>
+      </section>
+    </div>
+  </Transition>
 
   <Transition name="drawer">
     <div v-if="isDrawerOpen" class="drawer-backdrop" @click.self="closeDrawer">

@@ -21,6 +21,7 @@ defineEmits(['close']);
             title="年度摄影记录"
             scrolling="no"
             frameborder="0"
+            allow="autoplay; fullscreen; picture-in-picture"
             allowfullscreen
           ></iframe>
         </div>

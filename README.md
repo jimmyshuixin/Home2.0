@@ -183,28 +183,28 @@ cd YOUR_REPO
 
     也可以在 GitHub 仓库的 **Settings > Secrets and variables > Actions** 中添加 `CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID`，然后手动运行 `.github/workflows/deploy-music-api.yml`。
 
-6.  部署后得到的 URL 形如 `https://home-music-api.yourname.workers.dev/`。本项目当前已部署到 `https://home-music-api.jimmyai3132.workers.dev/`，并已通过 Cloudflare Custom Domain 绑定到 `https://music.xvyin.com/`。在 Cloudflare Pages 的环境变量里设置：
+6.  部署后得到的 URL 形如 `https://home-music-api.yourname.workers.dev/`。本项目当前已部署到 `https://home-music-api.jimmyai3132.workers.dev/`。在 Cloudflare Pages 的环境变量里设置：
 
     ```bash
-    VITE_MUSIC_API_URL=https://music.xvyin.com/
+    VITE_MUSIC_API_URL=https://home-music-api.jimmyai3132.workers.dev/
     VITE_MUSIC_SERVER=tencent
     VITE_MUSIC_TYPE=playlist
     VITE_MUSIC_PLAYLIST_ID=9206816111
-    VITE_MUSIC_LIMIT=18
+    VITE_MUSIC_LIMIT=all
     ```
 
-    前端会调用 `?server=tencent&type=playlist&id=9206816111&limit=18`，API 失败时自动回退到 `content/music/music.json` 的本地歌单。
+    前端会调用 `?server=tencent&type=playlist&id=9206816111&limit=all` 读取完整歌单，API 失败时自动回退到 `content/music/music.json` 的本地歌单。
 
 7.  部署后先访问健康检查端点，确认 Worker 本身已经在线：
 
     ```bash
-    curl https://music.xvyin.com/health
+    curl https://home-music-api.jimmyai3132.workers.dev/health
     ```
 
     再测试歌单接口：
 
     ```bash
-    curl "https://music.xvyin.com/?server=tencent&type=playlist&id=9206816111&limit=1"
+    curl "https://home-music-api.jimmyai3132.workers.dev/?server=tencent&type=playlist&id=9206816111&limit=all"
     ```
 
 #### 部署 `github-proxy.js` (GitHub 代理)

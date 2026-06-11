@@ -1,4 +1,4 @@
-import { onMounted, reactive, ref } from 'vue';
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { siteConfig } from '../data/site';
 
 const demoMessages = [
@@ -13,18 +13,22 @@ export function useGuestbook() {
     messages: demoMessages,
     isSubmitting: false,
     newName: '',
-    newEmail: '',
     newMessage: '',
     status: { type: '', message: '' },
   });
   const activeNotes = ref([]);
+  let refreshTimer;
 
   const syncHeroNotes = (source = demoMessages) => {
-    activeNotes.value = source.slice(0, 4).map((note, index) => ({
+    const notes = (Array.isArray(source) && source.length ? source : demoMessages).slice(0, 8);
+    activeNotes.value = notes.map((note, index) => ({
       id: `${note.name}-${index}`,
       ...note,
       style: {
-        '--note-rotate': ['-4deg', '5deg', '-6deg', '4deg'][index] || '0deg',
+        '--danmaku-top': `${10 + (index % 5) * 16}%`,
+        '--danmaku-delay': `${index * -3.8}s`,
+        '--danmaku-duration': `${24 + (index % 4) * 4}s`,
+        '--danmaku-alpha': index % 2 ? '0.72' : '0.86',
       },
     }));
   };
@@ -66,7 +70,6 @@ export function useGuestbook() {
       guestbook.messages = [newItem, ...guestbook.messages];
       syncHeroNotes(guestbook.messages);
       guestbook.newName = '';
-      guestbook.newEmail = '';
       guestbook.newMessage = '';
       guestbook.status = { type: 'success', message: '纸条已贴上，感谢你的到访。' };
     } catch {
@@ -79,6 +82,11 @@ export function useGuestbook() {
   onMounted(() => {
     syncHeroNotes(demoMessages);
     fetchMessages();
+    refreshTimer = window.setInterval(fetchMessages, 15000);
+  });
+
+  onBeforeUnmount(() => {
+    if (refreshTimer) window.clearInterval(refreshTimer);
   });
 
   return { guestbook, activeNotes, submitGuestbook };

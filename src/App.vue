@@ -1,28 +1,26 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   ArrowRight,
-  Atom,
-  BookOpen,
   Camera,
-  CheckCircle2,
   Code2,
   Dumbbell,
-  ExternalLink,
-  GitBranch,
+  Gamepad2,
   Github,
-  Heart,
-  HeartPulse,
+  ListMusic,
   Mail,
-  MapPin,
   MessageCircle,
   Music2,
+  Pause,
   PenLine,
-  Plane,
+  Play,
+  Repeat,
   Rocket,
   Send,
-  Sparkles,
-  Star,
+  Shuffle,
+  SkipBack,
+  SkipForward,
+  X,
 } from 'lucide-vue-next';
 import ChapterHeading from './components/ChapterHeading.vue';
 import MusicDock from './components/MusicDock.vue';
@@ -34,7 +32,7 @@ import { useGuestbook } from './composables/useGuestbook';
 import { useMusic } from './composables/useMusic';
 import { useScrollState } from './composables/useScrollState';
 import { useTheme } from './composables/useTheme';
-import { bookshelf, growthData, navItems, plansData, resumeData, siteConfig, socialLinks } from './data/site';
+import { navItems, resumeData, siteConfig } from './data/site';
 
 const { isDark, toggleTheme } = useTheme();
 const { progress, showBackToTop, activeSection, isNavHidden, scrollTo, scrollToTop } = useScrollState();
@@ -55,6 +53,8 @@ const {
   previousSong,
   progressText,
   refreshPlaylist,
+  seekTo,
+  selectTrack,
   startQrLogin,
   switchPlaylist,
   togglePlay,
@@ -62,31 +62,147 @@ const {
 } = useMusic();
 
 const showVideoModal = ref(false);
+const isDouyinOpen = ref(false);
+const isDesktopViewport = ref(false);
 const contactMode = ref('email');
-const currentBookIndex = ref(0);
+const gameUid = '188938401';
+const uidCopyStatus = ref('');
+let uidCopyTimer;
 
-const currentBook = computed(() => bookshelf[currentBookIndex.value] || bookshelf[0]);
-const shelfBooks = computed(() => bookshelf.filter((_, index) => index !== currentBookIndex.value));
-const fitnessDayCount = computed(() => Math.ceil(Math.abs(new Date() - new Date('2022-11-21')) / 864e5));
+const fitnessDayCount = computed(() => {
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const fitnessStartUtc = Date.UTC(2022, 9, 18);
+  return Math.max(1, Math.floor((todayUtc - fitnessStartUtc) / 864e5) + 1);
+});
 const siteUptime = computed(() => Math.ceil(Math.abs(new Date() - new Date(siteConfig.siteStartDate)) / 864e5));
 const currentDate = computed(() =>
   new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }).format(new Date()),
 );
-const plansInProgress = computed(() => plansData.filter((plan) => plan.status === 'ing' || plan.status === 'done'));
-const plansPlanning = computed(() => plansData.filter((plan) => plan.status === 'planning'));
-
-const planIcons = { Atom, Camera, GitBranch, HeartPulse, Music2 };
-const statusLabels = { planning: '筹备中', ing: '进行中', done: '已达成' };
-
-const switchBook = (book) => {
-  currentBookIndex.value = bookshelf.findIndex((item) => item.title === book.title);
-};
-
 const repoStats = computed(() => [
   { label: '提交贡献', value: github.stats.contributions || '326' },
   { label: '开源仓库', value: github.stats.repos || '21' },
   { label: '获得星标', value: github.stats.stars || '18' },
 ]);
+
+const closeDouyin = () => {
+  isDouyinOpen.value = false;
+};
+
+const copyGameUid = async () => {
+  try {
+    await navigator.clipboard.writeText(gameUid);
+    uidCopyStatus.value = '已复制';
+  } catch {
+    uidCopyStatus.value = '复制失败';
+  }
+  window.clearTimeout(uidCopyTimer);
+  uidCopyTimer = window.setTimeout(() => {
+    uidCopyStatus.value = '';
+  }, 1800);
+};
+
+let desktopMediaQuery;
+const syncDesktopViewport = () => {
+  isDesktopViewport.value = Boolean(desktopMediaQuery?.matches);
+};
+
+onMounted(() => {
+  desktopMediaQuery = window.matchMedia('(min-width: 861px)');
+  syncDesktopViewport();
+  desktopMediaQuery.addEventListener('change', syncDesktopViewport);
+  window.addEventListener('keydown', handleEscape);
+});
+
+onBeforeUnmount(() => {
+  desktopMediaQuery?.removeEventListener('change', syncDesktopViewport);
+  window.removeEventListener('keydown', handleEscape);
+  window.clearTimeout(uidCopyTimer);
+  document.body.style.overflow = '';
+});
+
+const handleEscape = (event) => {
+  if (event.key === 'Escape') closeDouyin();
+};
+
+watch(isDouyinOpen, (open) => {
+  document.body.style.overflow = open ? 'hidden' : '';
+});
+
+const heroQueue = computed(() => playlist.value);
+const heroMusicPercent = computed(() => {
+  const current = Number(musicState.currentTime || 0);
+  const duration = Number(musicState.duration || 0);
+  if (!Number.isFinite(current) || !Number.isFinite(duration) || duration <= 0) return 0;
+  return Math.min(100, Math.max(0, (current / duration) * 100));
+});
+const heroMusicStyle = computed(() => ({ '--hero-music-progress': `${heroMusicPercent.value}%` }));
+const canControlMusic = computed(() => Boolean(currentSong.value?.url));
+
+const heroLyricLines = computed(() => {
+  if (lyrics.value.length) return lyrics.value;
+  return [
+    { time: 0, text: currentSong.value?.name || '音乐正在路上' },
+    { time: 1, text: currentSong.value?.artist || '旋律会在这里慢慢浮现' },
+    { time: 2, text: progressText.value || '等待歌词同步' },
+  ];
+});
+
+const heroLyricIndex = computed(() => {
+  if (!heroLyricLines.value.length) return 0;
+  const index = activeLyricIndex.value >= 0 ? activeLyricIndex.value : 0;
+  return Math.min(index, heroLyricLines.value.length - 1);
+});
+
+const heroLyricStyle = computed(() => ({
+  transform: `translateY(-${Math.max(0, heroLyricIndex.value - 1) * 38}px)`,
+}));
+
+const musicDockProps = computed(() => ({
+  song: currentSong.value,
+  playlist: playlist.value,
+  playlists: playlists.value,
+  selectedPlaylistKey: musicState.selectedPlaylistKey,
+  selectedPlaylistName: musicState.selectedPlaylistName,
+  currentIndex: musicState.index,
+  currentTime: musicState.currentTime,
+  duration: musicState.duration,
+  lyrics: lyrics.value,
+  activeLyricIndex: activeLyricIndex.value,
+  playMode: musicState.playMode,
+  isPlaying: musicState.isPlaying,
+  isLoading: musicState.isLoading,
+  isLibraryOpen: musicState.isLibraryOpen,
+  isLoggedIn: musicState.isLoggedIn,
+  isLoginOpen: musicState.isLoginOpen,
+  isPollingLogin: musicState.isPollingLogin,
+  loginStatus: musicState.loginStatus,
+  loginMessage: musicState.loginMessage,
+  qrImage: musicState.qrImage,
+  qrUrl: musicState.qrUrl,
+  scanApp: musicState.scanApp,
+  source: musicState.source,
+  error: musicState.error,
+  progressText: progressText.value,
+}));
+
+const musicDockEvents = {
+  toggle: togglePlay,
+  next: nextSong,
+  previous: previousSong,
+  'select-track': selectTrack,
+  seek: seekTo,
+  'toggle-mode': togglePlayMode,
+  'toggle-library': () => {
+    musicState.isLibraryOpen = !musicState.isLibraryOpen;
+  },
+  'select-playlist': switchPlaylist,
+  refresh: refreshPlaylist,
+  'start-login': startQrLogin,
+  'cancel-login': cancelQrLogin,
+  logout: logoutMusic,
+  'load-custom': loadCustomPlaylist,
+};
 </script>
 
 <template>
@@ -98,6 +214,20 @@ const repoStats = computed(() => [
       @scroll-to="scrollTo"
       @toggle-theme="toggleTheme"
     />
+
+    <Transition name="fade">
+      <div v-if="isDouyinOpen" class="modal-backdrop douyin-modal-backdrop" @click.self="closeDouyin">
+        <section class="douyin-modal" role="dialog" aria-modal="true" aria-labelledby="photography-douyin-title">
+          <button class="icon-button modal-close" type="button" aria-label="关闭抖音二维码" @click="closeDouyin">
+            <X :size="22" />
+          </button>
+          <p>扫码关注</p>
+          <h2 id="photography-douyin-title">虚宁的抖音</h2>
+          <img src="/content/social/douyin-qr.jpg" alt="虚宁的抖音二维码" />
+          <span>抖音号：tidingjinluo</span>
+        </section>
+      </div>
+    </Transition>
 
     <aside v-if="progress > 0.16" class="section-rail desktop-only" aria-label="章节快捷导航">
       <button
@@ -111,210 +241,183 @@ const repoStats = computed(() => [
       </button>
     </aside>
 
-    <main>
+    <main class="site-main">
       <section id="hero" class="hero-section">
-        <div class="hero-notes" aria-hidden="true">
-          <div v-for="note in activeNotes" :key="note.id" class="floating-note" :style="note.style">
-            <strong>{{ note.name }}</strong>
-            <span>{{ note.message }}</span>
-          </div>
-        </div>
+        <div class="hero-grid">
+          <figure class="portrait-card">
+            <div class="portrait-frame">
+              <img src="/content/visuals/field-portrait.png" alt="虚宁手绘头像" />
+            </div>
+          </figure>
 
-        <div class="mobile-hero-card">
-          <h1>虚宁</h1>
-          <p>Xu Ning's Space</p>
-          <div class="mobile-photo-note">
-            <img src="/content/visuals/field-portrait.png" alt="虚宁手绘头像" />
-            <blockquote>在探索中学习，在热爱中创造，于未来成为更好的自己。</blockquote>
-          </div>
-          <div class="mobile-current">
-            <strong>最近在做</strong>
-            <span><Atom :size="16" /> 研究：核科学与技术 & 加速器物理</span>
-            <span><Code2 :size="16" /> 学习：AI & 全栈开发</span>
-            <span><Heart :size="16" /> 生活：健身 · 阅读 · 摄影 · 音乐</span>
-            <span><Rocket :size="16" /> 目标：持续成长，未来可期</span>
-          </div>
-        </div>
-
-        <div class="portrait-card">
-          <img src="/content/visuals/field-portrait.png" alt="虚宁手绘头像" />
-          <p>Keep Exploring.</p>
-        </div>
-
-        <div class="hero-copy">
-          <h1>Hi! I'm <span>虚宁</span></h1>
-          <p class="hero-quote">路漫漫其修远兮<br />吾将上下而求索</p>
-          <div class="hero-actions">
-            <button class="paper-button paper-button--red" type="button" @click="showVideoModal = true">
-              <Camera :size="20" />
-              年度摄影记录
-            </button>
-            <button class="paper-button" type="button" @click="scrollTo('story')">
-              <Sparkles :size="20" />
-              双鱼座 / INFJ-A
-            </button>
-          </div>
-        </div>
-
-        <div class="hero-botanical" aria-hidden="true">
-          <span></span><span></span><span></span><span></span>
-        </div>
-
-        <aside class="today-card">
-          <span>{{ currentDate }}</span>
-          <strong>晴 · 继续记录</strong>
-        </aside>
-
-        <div class="scroll-cue" @click="scrollTo('story')">
-          <span>下滑翻阅</span>
-          <ArrowRight :size="18" />
-        </div>
-      </section>
-
-      <section id="story" class="journal-section story-section">
-        <div class="torn-edge torn-edge--top" aria-hidden="true"></div>
-        <ChapterHeading number="01" title="故事 & 扉页" subtitle="这里是我的数字手账，一本关于成长、探索与热爱的记录。" />
-        <div class="story-spread">
-          <div>
-            <p class="lead">
-              这里是我的数字手账，一本关于成长、探索与热爱的记录。<br />
-              我喜欢把复杂的问题拆开，也喜欢在生活里寻找微小的光。<br />
-              工程与理性是我的底色，而好奇与热爱，让一切变得有意义。
+          <div class="hero-copy">
+            <h1>
+              <span>虚宁</span>
+            </h1>
+            <p class="hero-statement">
+              路漫漫其修远兮，吾将上下而求索。
             </p>
-            <div class="interest-row">
-              <span><Atom :size="18" /> 理性思考</span>
-              <span><BookOpen :size="18" /> 持续学习</span>
-              <span><Camera :size="18" /> 记录生活</span>
-              <span><Rocket :size="18" /> 探索未知</span>
-            </div>
-          </div>
-          <div class="open-book-illustration" aria-hidden="true">
-            <div class="book-page">
-              <strong>Stay curious.</strong>
-              <span>Keep exploring.</span>
-            </div>
-            <div class="book-page book-page--image">
-              <img src="/content/Photos/1.jpg" alt="" />
-            </div>
-          </div>
-        </div>
-        <div class="volume-divider">
-          <div class="compass-doodle" aria-hidden="true"></div>
-          <span>Volume.1</span>
-          <strong>探索与求索</strong>
-          <small>从好奇出发，沿着问题的轨迹，一步一步向前。</small>
-        </div>
-      </section>
 
-      <section id="growth" class="journal-section">
-        <ChapterHeading number="02" title="成长 & 轨迹" subtitle="在探索中学习，在实践中成长。" accent="yellow" />
-        <div class="notebook-grid notebook-grid--growth">
-          <article class="notebook-panel timeline-panel">
-            <h3><MapPin :size="20" /> 教育背景</h3>
-            <ol class="timeline">
-              <li v-for="edu in resumeData.education" :key="`${edu.institution}-${edu.duration}`">
-                <time>{{ edu.duration }}</time>
-                <strong>{{ edu.institution }}</strong>
-                <span>{{ edu.major }}<template v-if="edu.minor"> / {{ edu.minor }}</template></span>
-                <small v-if="edu.gpa">GPA {{ edu.gpa }} · Rank {{ edu.ranking }}</small>
-              </li>
-            </ol>
-          </article>
-
-          <article class="notebook-panel honors-panel">
-            <h3><Star :size="20" /> 荣誉墙</h3>
-            <div class="honor-stage">
-              <strong>研究生阶段</strong>
-              <span v-for="item in resumeData.honors.graduate" :key="item">{{ item }}</span>
-            </div>
-            <div class="honor-list">
-              <span v-for="honor in resumeData.honors.undergraduate.slice(0, 4)" :key="honor">
-                {{ honor }}
-              </span>
-            </div>
-          </article>
-
-          <article class="notebook-panel experience-panel">
-            <h3><Plane :size="20" /> 校园历练</h3>
-            <div class="experience-line">
-              <div v-for="experience in resumeData.campusExperience" :key="experience.role">
-                <strong>{{ experience.role }}</strong>
-                <time>{{ experience.duration }}</time>
-                <p>{{ experience.description }}</p>
-              </div>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section id="life" class="journal-section">
-        <ChapterHeading number="03" title="活力 & 生活" subtitle="在热爱里充电，在生活中平衡。" accent="green" />
-        <div class="life-board">
-          <article class="notebook-panel fitness-panel">
-            <div class="panel-topline">
-              <h3><Dumbbell :size="20" /> 运动律动</h3>
-              <span>累计活动天数</span>
-            </div>
-            <strong class="big-number">{{ fitnessDayCount }}<small>天</small></strong>
-            <div class="sketch-chart" aria-label="近期训练强度图">
-              <svg viewBox="0 0 420 110" role="img">
-                <polyline
-                  points="0,82 35,74 62,40 90,88 130,65 155,22 190,86 230,75 260,47 292,76 330,28 360,84 420,58"
-                />
-              </svg>
-            </div>
-            <div class="target-strip">
-              <span>本月目标</span>
-              <div><i style="width: 72%"></i></div>
-              <strong>15 / 20</strong>
-            </div>
-          </article>
-
-          <article class="notebook-panel bookshelf-panel">
-            <h3><BookOpen :size="20" /> 书架藏书</h3>
-            <div class="current-book">
-              <img :src="currentBook.coverUrl" :alt="currentBook.title" />
-              <div>
-                <span>当前在读</span>
-                <strong>{{ currentBook.title }}</strong>
-                <p>{{ currentBook.author }}</p>
-                <div class="stars">
-                  <Star v-for="n in currentBook.rating" :key="n" :size="15" fill="currentColor" />
-                </div>
-              </div>
-            </div>
-            <div class="book-strip">
-              <button v-for="book in shelfBooks" :key="book.title" type="button" @click="switchBook(book)">
-                <img :src="book.coverUrl" :alt="book.title" />
+            <div class="hero-actions" aria-label="首页主要操作">
+              <button class="paper-button paper-button--primary" type="button" @click="scrollTo('recent')">
+                开始阅读
+                <ArrowRight :size="18" />
+              </button>
+              <button class="paper-button paper-button--ghost" type="button" @click="showVideoModal = true">
+                <Camera :size="18" />
+                年度摄影记录
               </button>
             </div>
-          </article>
 
-          <article class="notebook-panel media-panel">
-            <h3><Camera :size="20" /> 影像记录</h3>
-            <div class="photo-strip">
-              <img src="/content/Photos/1.jpg" alt="摄影作品 1" />
-              <img src="/content/Photos/2.jpg" alt="摄影作品 2" />
-              <img src="/content/Photos/3.jpg" alt="摄影作品 3" />
+            <p class="hero-focus-title">最近在做</p>
+              <dl class="hero-focus-list hero-focus-list--notes">
+              <div>
+                <dt><Dumbbell :size="17" /> 健身</dt>
+              </div>
+              <div>
+                <dt><Camera :size="17" /> 摄影</dt>
+              </div>
+            </dl>
+
+            <div class="hero-danmaku-layer" aria-label="实时留言弹幕">
+              <div
+                v-for="note in activeNotes"
+                :key="note.id"
+                class="hero-danmaku-item"
+                :style="note.style"
+              >
+                <span>{{ note.name }}</span>
+                <p>{{ note.message }}</p>
+              </div>
             </div>
-            <button class="text-link" type="button" @click="showVideoModal = true">
-              查看年度摄影 <ArrowRight :size="16" />
-            </button>
+          </div>
+
+          <aside class="hero-console" aria-label="首页音乐与留言">
+            <section class="hero-player-card" aria-label="首页音乐播放器">
+              <header>
+                <span><Music2 :size="16" /> 正在播放</span>
+              </header>
+
+              <div class="hero-player-now">
+                <img :src="currentSong.cover || '/content/icon/32.png'" :alt="`${currentSong.name} cover`" />
+                <div>
+                  <strong>{{ currentSong.name }}</strong>
+                  <span>{{ currentSong.artist || 'Unknown Artist' }}</span>
+                  <p>{{ progressText }}</p>
+                </div>
+              </div>
+
+              <label class="hero-player-progress" :style="heroMusicStyle" aria-label="Track progress">
+                <input
+                  type="range"
+                  min="0"
+                  :max="musicState.duration || 100"
+                  :value="musicState.currentTime || 0"
+                  step="1"
+                  :disabled="!musicState.duration"
+                  @input="seekTo(Number($event.target.value))"
+                />
+              </label>
+
+              <div class="hero-player-controls">
+                <button type="button" aria-label="Previous song" :disabled="!canControlMusic" @click="previousSong">
+                  <SkipBack :size="20" />
+                </button>
+                <button class="hero-play-button" type="button" :aria-label="musicState.isPlaying ? 'Pause' : 'Play'" :disabled="!canControlMusic" @click="togglePlay">
+                  <Pause v-if="musicState.isPlaying" :size="24" />
+                  <Play v-else :size="24" />
+                </button>
+                <button type="button" aria-label="Next song" :disabled="!canControlMusic" @click="nextSong">
+                  <SkipForward :size="20" />
+                </button>
+                <button type="button" :aria-label="musicState.playMode === 'random' ? 'Random playback enabled' : 'Ordered playback enabled'" @click="togglePlayMode">
+                  <Shuffle v-if="musicState.playMode === 'random'" :size="20" />
+                  <Repeat v-else :size="20" />
+                </button>
+              </div>
+
+              <div class="hero-player-queue">
+                <button
+                  v-for="(track, index) in heroQueue"
+                  :key="`${track.id || track.name}-${index}`"
+                  type="button"
+                  :class="{ active: index === musicState.index }"
+                  :disabled="!track.url"
+                  @click="selectTrack(index, track)"
+                >
+                  <span>{{ track.name }}</span>
+                  <small>{{ track.artist || 'Unknown Artist' }}</small>
+                </button>
+              </div>
+              <button class="hero-player-link" type="button" aria-label="打开音乐面板" title="打开音乐面板" @click="musicState.isLibraryOpen = true">
+                <span>打开音乐面板</span>
+                <ListMusic :size="19" />
+              </button>
+            </section>
+          </aside>
+
+        </div>
+      </section>
+
+      <section id="recent" class="journal-section recent-section">
+        <ChapterHeading number="01" title="最近" />
+        <div class="recent-layout">
+          <article class="recent-card recent-card--fitness">
+            <div class="recent-card__topline">
+              <span>01 / FITNESS</span>
+              <Dumbbell :size="22" aria-hidden="true" />
+            </div>
+            <div class="recent-fitness__copy">
+              <p>健身</p>
+              <span>累计坚持</span>
+              <strong>{{ fitnessDayCount }}<small>天</small></strong>
+              <time datetime="2022-10-18">始于 2022.10.18</time>
+            </div>
+            <div class="recent-fitness__track" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <img src="/content/recent/fitness-cover.png" alt="健身训练记录封面" />
           </article>
 
-          <article class="notebook-panel links-panel">
-            <h3><Heart :size="20" /> 社交连接</h3>
-            <a v-for="link in socialLinks" :key="link.label" :href="link.href" target="_blank" rel="noreferrer">
-              <span>{{ link.label }}</span>
-              <strong>{{ link.value }}</strong>
-              <ExternalLink :size="16" />
-            </a>
+          <article class="recent-card recent-card--photography">
+            <img src="/content/recent/photography-cover.jpg" alt="暖色灯光摄影作品" />
+            <div class="recent-card__topline recent-card__topline--light">
+              <span>02 / PHOTOGRAPHY</span>
+              <Camera :size="22" aria-hidden="true" />
+            </div>
+            <div class="recent-photography__copy">
+              <p>摄影</p>
+              <strong>光隅</strong>
+              <button class="recent-photography__douyin" type="button" @click="isDouyinOpen = true">前往抖音</button>
+            </div>
+          </article>
+
+          <article class="recent-card recent-card--game">
+            <div class="recent-card__topline">
+              <span>03 / LEISURE</span>
+              <Gamepad2 :size="22" aria-hidden="true" />
+            </div>
+            <div class="recent-game__copy">
+              <p>娱乐</p>
+              <strong>常玩游戏</strong>
+              <button
+                class="game-uid-copy"
+                type="button"
+                :aria-label="uidCopyStatus ? `${uidCopyStatus}，游戏 UID ${gameUid}` : `复制游戏 UID ${gameUid}`"
+                @click="copyGameUid"
+              >
+                原神 · {{ uidCopyStatus || `加我好友：${gameUid}` }}
+              </button>
+            </div>
+            <div class="recent-game__orbit" aria-hidden="true"></div>
+            <img src="/content/game/Furina1.png" alt="原神角色芙宁娜" />
           </article>
         </div>
+
       </section>
 
       <section id="tech" class="journal-section">
-        <ChapterHeading number="03" title="技术 & 创造" subtitle="点亮技能树，用代码与工程丈量世界。" accent="blue" />
+        <ChapterHeading number="02" title="技术 & 创造" accent="blue" />
         <div class="tech-ledger">
           <article class="notebook-panel skill-table">
             <h3><Code2 :size="20" /> 技能栈</h3>
@@ -365,49 +468,8 @@ const repoStats = computed(() => [
         </div>
       </section>
 
-      <section id="future" class="journal-section">
-        <ChapterHeading number="04" title="未来 & 蓝图" subtitle="承载着未完成的梦想，也期待继续向前。" accent="yellow" />
-        <div class="plans-board">
-          <article class="notebook-panel">
-            <h3>进行中 / 已达成</h3>
-            <div v-for="plan in plansInProgress" :key="plan.title" class="plan-row">
-              <component :is="planIcons[plan.icon] || Rocket" :size="22" />
-              <div>
-                <div class="plan-title">
-                  <strong>{{ plan.title }}</strong>
-                  <span :class="`status-${plan.status}`">{{ statusLabels[plan.status] }}</span>
-                </div>
-                <p>{{ plan.desc }}</p>
-                <div class="progress-bar"><i :style="{ width: `${plan.progress}%` }"></i></div>
-              </div>
-              <b>{{ plan.progress }}%</b>
-            </div>
-          </article>
-
-          <article class="notebook-panel plan-notes">
-            <h3>筹备中</h3>
-            <div v-for="plan in plansPlanning" :key="plan.title" class="todo-note">
-              <strong>{{ plan.title }}</strong>
-              <p>{{ plan.desc }}</p>
-              <span v-for="milestone in plan.milestones" :key="milestone.label">
-                <CheckCircle2 :size="15" :class="{ done: milestone.done }" />
-                {{ milestone.label }}
-              </span>
-            </div>
-          </article>
-
-          <aside class="notebook-panel short-goals">
-            <h3>短期小目标</h3>
-            <label v-for="target in growthData.targets" :key="target.name">
-              <input type="checkbox" :checked="target.current >= target.total" readonly />
-              <span>{{ target.name }}</span>
-            </label>
-          </aside>
-        </div>
-      </section>
-
       <section id="contact" class="journal-section contact-section">
-        <ChapterHeading number="05" title="留言 & 尾声" subtitle="感谢你的到来，欢迎留下你的足迹与想法。" />
+        <ChapterHeading number="03" title="留言 & 尾声" />
         <div class="contact-board">
           <article class="notebook-panel contact-panel">
             <div class="tabs" role="tablist" aria-label="联系模式">
@@ -432,7 +494,7 @@ const repoStats = computed(() => [
                 <span>想对我说的话</span>
                 <textarea v-model="contact.message" maxlength="500" rows="6" placeholder="想对我说的话..." required></textarea>
               </label>
-              <button class="paper-button paper-button--dark" type="submit" :disabled="contact.sending">
+              <button class="paper-button paper-button--primary" type="submit" :disabled="contact.sending">
                 <Send :size="18" /> {{ contact.sending ? '发送中...' : '发送信件' }}
               </button>
               <p v-if="contact.status" class="form-status" :class="contact.statusType">{{ contact.status }}</p>
@@ -444,14 +506,10 @@ const repoStats = computed(() => [
                 <input v-model="guestbook.newName" maxlength="20" placeholder="你的昵称 *" required />
               </label>
               <label>
-                <span>邮箱（可选）</span>
-                <input v-model="guestbook.newEmail" type="email" placeholder="邮箱（可选）" />
-              </label>
-              <label>
                 <span>想贴上的纸条</span>
                 <textarea v-model="guestbook.newMessage" maxlength="100" rows="5" placeholder="想贴上的纸条..." required></textarea>
               </label>
-              <button class="paper-button paper-button--red" type="submit" :disabled="guestbook.isSubmitting">
+              <button class="paper-button paper-button--primary" type="submit" :disabled="guestbook.isSubmitting">
                 <PenLine :size="18" /> {{ guestbook.isSubmitting ? '贴纸条中...' : '写下留言' }}
               </button>
               <p v-if="guestbook.status.message" class="form-status" :class="guestbook.status.type">
@@ -481,7 +539,7 @@ const repoStats = computed(() => [
 
     <footer class="site-footer">
       <div>
-        <strong>虚宁 | {{ siteConfig.englishName }}</strong>
+        <strong>虚宁</strong>
         <span>© 2022-{{ new Date().getFullYear() }} · 已运行 {{ siteUptime }} 天</span>
       </div>
       <nav aria-label="页脚导航">
@@ -493,38 +551,18 @@ const repoStats = computed(() => [
     </footer>
 
     <MusicDock
-      :song="currentSong"
-      :playlist="playlist"
-      :playlists="playlists"
-      :selected-playlist-key="musicState.selectedPlaylistKey"
-      :lyrics="lyrics"
-      :active-lyric-index="activeLyricIndex"
-      :play-mode="musicState.playMode"
-      :is-playing="musicState.isPlaying"
-      :is-loading="musicState.isLoading"
-      :is-library-open="musicState.isLibraryOpen"
-      :is-logged-in="musicState.isLoggedIn"
-      :is-login-open="musicState.isLoginOpen"
-      :is-polling-login="musicState.isPollingLogin"
-      :login-status="musicState.loginStatus"
-      :login-message="musicState.loginMessage"
-      :qr-image="musicState.qrImage"
-      :qr-url="musicState.qrUrl"
-      :scan-app="musicState.scanApp"
-      :source="musicState.source"
-      :error="musicState.error"
-      :progress-text="progressText"
-      @toggle="togglePlay"
-      @next="nextSong"
-      @previous="previousSong"
-      @toggle-mode="togglePlayMode"
-      @toggle-library="musicState.isLibraryOpen = !musicState.isLibraryOpen"
-      @select-playlist="switchPlaylist"
-      @refresh="refreshPlaylist"
-      @start-login="startQrLogin"
-      @cancel-login="cancelQrLogin"
-      @logout="logoutMusic"
-      @load-custom="loadCustomPlaylist"
+      v-if="isDesktopViewport"
+      class="music-dock--desktop-source"
+      instance-id="hero"
+      v-bind="musicDockProps"
+      v-on="musicDockEvents"
+    />
+
+    <MusicDock
+      class="music-dock--mobile mobile-only"
+      instance-id="mobile"
+      v-bind="musicDockProps"
+      v-on="musicDockEvents"
     />
 
     <button class="back-to-top" :class="{ show: showBackToTop }" type="button" aria-label="回到顶部" @click="scrollToTop">
