@@ -12,11 +12,9 @@ const DEFAULT_BITRATE = 320;
 const DEFAULT_COVER_SIZE = 300;
 const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_MEDIA_MODE = 'deferred';
-const DEFAULT_MEDIA_URL_BASE = 'https://api.injahow.cn/meting/';
 const TOKEN_PREFIX_V1 = 'meting-session.v1.';
 const TOKEN_PREFIX_V2 = 'meting-session.v2.';
 const DEFERRED_MEDIA_SERVERS = new Set(['tencent']);
-const UPSTREAM_SONG_TYPES = new Set(['playlist', 'song', 'album', 'artist', 'search']);
 
 const SUPPORTED_SERVERS = new Set(Meting.getSupportedPlatforms());
 const SUPPORTED_TYPES = new Set([
@@ -91,7 +89,8 @@ export default {
       }
 
       const params = readParams(request, env);
-      const canCache = request.method === 'GET' && !params.sessionToken && params.cacheTtl > 0;
+      const canCache =
+        request.method === 'GET' && !params.sessionToken && params.type !== 'url' && params.cacheTtl > 0;
       const cache = canCache ? globalThis.caches?.default : null;
       const cacheKey = new Request(url.toString(), request);
       const cached = cache ? await cache.match(cacheKey) : null;
@@ -241,6 +240,7 @@ function readParams(request, env) {
     sessionToken: readSessionTokenFromRequest(request),
     cacheTtl: clampNumber(env.METING_CACHE_TTL, 0, 86400, DEFAULT_CACHE_TTL),
     deferMedia: shouldDeferMedia(server, env),
+    apiBaseUrl: `${url.origin}${url.pathname}`,
   };
 }
 
@@ -265,12 +265,15 @@ async function resolveMusic(params, env) {
     });
   }
 
-  if (params.deferMedia && !sessionCookie && UPSTREAM_SONG_TYPES.has(params.type)) {
-    return await resolveUpstreamSongs(params, env);
-  }
-
   if (params.type === 'url') {
-    return parseMetingJson(await meting.url(params.id, params.bitrate), {});
+    const result = parseMetingJson(await meting.url(params.id, params.bitrate), {});
+    if (!result.url) {
+      throw httpError(
+        sessionCookie ? 502 : 401,
+        result.message || 'QQ Music login is required to resolve this track',
+      );
+    }
+    return result;
   }
 
   if (params.type === 'pic') {
@@ -283,38 +286,13 @@ async function resolveMusic(params, env) {
 
   const rawSongs = await getSongRecords(meting, params);
 
-  if (!rawSongs.length && params.deferMedia && UPSTREAM_SONG_TYPES.has(params.type)) {
-    return await resolveUpstreamSongs(params, env);
+  if (!rawSongs.length) {
+    throw httpError(502, `No songs were returned for this ${params.server} ${params.type}`);
   }
 
   const songs = await enrichSongs(rawSongs, params, env, sessionCookie);
 
   return songs;
-}
-
-async function resolveUpstreamSongs(params, env) {
-  const query = {
-    server: params.server,
-    type: params.type,
-    id: params.id,
-    page: params.page,
-  };
-
-  if (!params.limitAll) {
-    query.limit = params.limit;
-  }
-
-  const response = await fetch(
-    buildMediaEndpoint(env, query),
-    { headers: { Accept: 'application/json' } },
-  );
-  const payload = parseMetingJson(await response.text(), []);
-
-  if (!response.ok) {
-    throw httpError(response.status, payload?.error || payload?.message || 'Upstream music API error');
-  }
-
-  return limitSongs((Array.isArray(payload) ? payload : [payload]).filter(Boolean), params);
 }
 
 async function resolveUserPlaylists(server, env, sessionCookie, option = {}) {
@@ -419,13 +397,18 @@ async function enrichDeferredSong(song, params, env, sessionCookie) {
   const id = song.url_id || song.id;
   const picId = song.pic_id || song.id;
   const lyricId = song.lyric_id || song.id;
-  const cover = buildMediaEndpoint(env, {
+  const meting = createMeting(params.server, env, sessionCookie);
+  const picInfo = await meting
+    .pic(picId, params.coverSize)
+    .then((value) => parseMetingJson(value, {}))
+    .catch(() => ({}));
+  const urlResolver = buildResolverEndpoint(params.apiBaseUrl, {
     server: params.server,
-    type: 'pic',
-    id: picId,
-    cover: params.coverSize,
+    type: 'url',
+    id,
+    br: params.bitrate,
   });
-  const lrcUrl = buildMediaEndpoint(env, {
+  const lrcUrl = buildResolverEndpoint(params.apiBaseUrl, {
     server: params.server,
     type: 'lrc',
     id: lyricId,
@@ -437,20 +420,18 @@ async function enrichDeferredSong(song, params, env, sessionCookie) {
     artist: Array.isArray(song.artist) ? song.artist : song.artist ? [song.artist] : [],
     album: song.album || '',
     source: song.source || params.server,
-    url: buildMediaEndpoint(env, {
-      server: params.server,
-      type: 'url',
-      id,
-      br: params.bitrate,
-    }),
+    url: urlResolver,
+    urlResolver,
+    resolveUrl: true,
     playable: true,
     playError: '',
-    cover,
-    pic: cover,
+    cover: picInfo.url || '',
+    pic: picInfo.url || '',
     lrc: '',
     lyric: '',
     lrcUrl,
     lyricUrl: lrcUrl,
+    resolveLyrics: true,
     tlyric: '',
     br: params.bitrate,
   };
@@ -475,8 +456,8 @@ function shouldDeferMedia(server, env) {
   return mode === 'deferred' && DEFERRED_MEDIA_SERVERS.has(server);
 }
 
-function buildMediaEndpoint(env, query) {
-  const url = new URL(String(env.METING_MEDIA_URL_BASE || DEFAULT_MEDIA_URL_BASE));
+function buildResolverEndpoint(baseUrl, query) {
+  const url = new URL(baseUrl);
 
   Object.entries(query).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== '') {

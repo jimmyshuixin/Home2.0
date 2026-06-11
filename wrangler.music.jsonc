@@ -19,7 +19,6 @@
     "METING_COVER_SIZE": "300",
     "METING_CONCURRENCY": "3",
     "METING_MEDIA_MODE": "deferred",
-    "METING_MEDIA_URL_BASE": "https://api.injahow.cn/meting/",
     "METING_CACHE_TTL": "1800",
     "METING_SESSION_TTL": "604800"
   }

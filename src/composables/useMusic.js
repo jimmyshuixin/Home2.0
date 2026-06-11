@@ -5,7 +5,8 @@ const PLAY_MODE_KEY = 'home-music-play-mode';
 const PLAYLIST_KEY = 'home-music-selected-playlist';
 const SESSION_KEY = 'home-music-session';
 const PLAYLIST_CACHE_PREFIX = 'home-music-playlist:';
-const PLAYLIST_CACHE_VERSION = 'full-playlist-v1';
+const PLAYLIST_CACHE_VERSION = 'full-playlist-v2';
+const MEDIA_URL_MAX_AGE_MS = 1000 * 60 * 10;
 const LOGIN_SUCCESS_CODE = 803;
 const LOGIN_EXPIRED_CODE = 800;
 const LOGIN_POLL_MS = 2400;
@@ -20,6 +21,7 @@ const normalizePath = (value) => {
 const normalizeSong = (song = {}) => {
   const artist = Array.isArray(song.artist) ? song.artist.join(' / ') : song.artist || song.author || 'Unknown Artist';
   const url = normalizePath(song.url || song.src || song.link);
+  const urlResolver = normalizePath(song.urlResolver || (song.resolveUrl ? url : ''));
   const rawLrc = song.lrc || song.lyric || '';
   const lrcUrl = normalizePath(song.lrcUrl || song.lyricUrl || (/^https?:/i.test(rawLrc) ? rawLrc : ''));
 
@@ -30,11 +32,15 @@ const normalizeSong = (song = {}) => {
     album: song.album || '',
     source: song.source || '',
     url,
+    urlResolver,
+    resolveUrl: Boolean(song.resolveUrl),
+    resolvedAt: Number(song.resolvedAt || 0),
     playable: 'playable' in song ? Boolean(song.playable) : Boolean(url),
     playError: song.playError || song.message || '',
     cover: normalizePath(song.cover || song.pic || song.picture || song.image) || '/content/icon/32.png',
     lrc: lrcUrl && rawLrc === lrcUrl ? '' : rawLrc,
     lrcUrl,
+    resolveLyrics: Boolean(song.resolveLyrics),
   };
 };
 
@@ -274,6 +280,36 @@ export function useMusic() {
     return playableIndexes[(currentPosition + direction + playableIndexes.length) % playableIndexes.length];
   };
 
+  const resolvePlayableUrl = async (song, songIndex) => {
+    const shouldRefresh =
+      song?.urlResolver && (!song.resolvedAt || Date.now() - song.resolvedAt > MEDIA_URL_MAX_AGE_MS);
+    if (!song?.resolveUrl && !shouldRefresh) return song?.url || '';
+
+    const resolverUrl = song.urlResolver || song.url;
+    if (!resolverUrl) return '';
+
+    const data = await fetchJson(resolverUrl);
+    const resolvedUrl = normalizePath(data?.url || '');
+    if (!resolvedUrl) {
+      throw new Error(data?.message || 'QQ Music did not return a playable URL. Please log in and try again.');
+    }
+
+    const current = playlist.value[songIndex];
+    if (current?.id === song.id) {
+      playlist.value.splice(songIndex, 1, {
+        ...current,
+        url: resolvedUrl,
+        urlResolver: resolverUrl,
+        resolveUrl: false,
+        resolvedAt: Date.now(),
+        playable: true,
+        playError: '',
+      });
+    }
+
+    return resolvedUrl;
+  };
+
   const setAudioSource = async (shouldPlay = state.isPlaying) => {
     if (!currentSong.value.url) {
       const nextPlayableIndex = getNextIndex(1);
@@ -286,10 +322,19 @@ export function useMusic() {
       }
     }
 
-    const player = ensureAudio();
-    if (!player || !currentSong.value.url) return;
+    let playableUrl = currentSong.value.url;
+    try {
+      playableUrl = await resolvePlayableUrl(currentSong.value, state.index);
+    } catch (error) {
+      state.isPlaying = false;
+      state.error = error?.message || 'This track could not be resolved.';
+      return;
+    }
 
-    const desiredUrl = new URL(currentSong.value.url, window.location.href).href;
+    const player = ensureAudio();
+    if (!player || !playableUrl) return;
+
+    const desiredUrl = new URL(playableUrl, window.location.href).href;
     if (player.src !== desiredUrl) {
       player.src = desiredUrl;
       state.currentTime = 0;
@@ -327,7 +372,9 @@ export function useMusic() {
     const songId = song.id;
 
     try {
-      const lrc = await fetchText(song.lrcUrl);
+      const lrc = song.resolveLyrics
+        ? (await fetchJson(song.lrcUrl))?.lyric || ''
+        : await fetchText(song.lrcUrl);
       if (!String(lrc).trim()) return false;
 
       const current = playlist.value[songIndex];

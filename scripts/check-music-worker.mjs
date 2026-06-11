@@ -50,7 +50,18 @@ assert(playlist.status === 200, `Expected playlist smoke test to return 200, got
 assert(Array.isArray(playlist.body), 'Expected playlist smoke test to return a song array');
 assert(playlist.body[0]?.url?.startsWith('https://'), 'Expected playlist song to include a playable URL endpoint');
 assert(playlist.body[0]?.url?.includes('type=url'), 'Expected playlist song URL to defer audio resolution through Meting');
+assert(playlist.body[0]?.url?.startsWith('https://music.local/'), 'Expected audio resolution to stay on this Worker');
+assert(!playlist.body[0]?.url?.includes('injahow.cn'), 'Expected no dependency on the third-party Meting API');
+assert(playlist.body[0]?.cover?.startsWith('https://y.gtimg.cn/'), 'Expected Tencent covers to use the image CDN');
 assert(playlist.body.length === 1, `Expected limit=1 playlist smoke test to return 1 song, got ${playlist.body.length}`);
+
+const resolverUrl = new URL(playlist.body[0].url);
+const anonymousResolver = await call(`${resolverUrl.pathname}${resolverUrl.search}`);
+assert(anonymousResolver.status === 401, `Expected anonymous audio resolution to return 401, got ${anonymousResolver.status}`);
+assert(
+  !String(anonymousResolver.body?.error || '').includes('injahow.cn'),
+  'Expected anonymous audio resolution errors to come from this Worker',
+);
 
 const fullPlaylist = await call('/?server=tencent&type=playlist&id=9206816111&limit=all');
 assert(fullPlaylist.status === 200, `Expected full playlist smoke test to return 200, got ${fullPlaylist.status}`);
@@ -79,6 +90,7 @@ console.log(
         health: health.status,
         cover: cover.status,
         playlist: playlist.status,
+        anonymousResolver: anonymousResolver.status,
         fullPlaylist: fullPlaylist.status,
         fullPlaylistCount: fullPlaylist.body.length,
         invalidServer: invalid.status,
