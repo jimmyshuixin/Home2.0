@@ -567,7 +567,7 @@ textarea:focus-visible {
 
 .hero-danmaku-layer {
   position: absolute;
-  inset: 0;
+  inset: 0 0 0 var(--hero-red-line-x, 0);
   z-index: 1;
   overflow: hidden;
   opacity: 0.58;
@@ -637,6 +637,7 @@ textarea:focus-visible {
 }
 
 .hero-copy {
+  --hero-red-line-x: 2%;
   position: relative;
   min-width: 0;
   min-height: var(--hero-band-height);
@@ -659,7 +660,7 @@ textarea:focus-visible {
 .hero-copy::before {
   content: "";
   position: absolute;
-  inset: 3% -4% 2% -1%;
+  inset: clamp(20px, 3svh, 28px) 0 clamp(24px, 4svh, 36px) var(--hero-red-line-x);
   z-index: -1;
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--surface) 72%, transparent), transparent 82%),
@@ -911,8 +912,82 @@ textarea:focus-visible {
   min-height: 0;
   height: var(--hero-band-height);
   display: grid;
+  grid-template-rows: minmax(0, 0fr) minmax(0, 1fr);
+  gap: 0;
+  overflow: visible;
+  transition:
+    grid-template-rows 920ms cubic-bezier(0.16, 1, 0.3, 1),
+    gap 920ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.hero-console.is-playing {
+  grid-template-rows: minmax(0, 1fr) clamp(86px, 10svh, 96px);
   gap: 18px;
+}
+
+.hero-lyric-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  padding: clamp(10px, 1.4vw, 18px) clamp(12px, 1.8vw, 24px) 0;
   overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(16px);
+  transition:
+    opacity 620ms ease,
+    transform 920ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.hero-console.is-playing .hero-lyric-stage {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.hero-lyric-window {
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 16%, #000 84%, transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 16%, #000 84%, transparent);
+  scrollbar-width: none;
+  scroll-behavior: smooth;
+}
+
+.hero-lyric-window::-webkit-scrollbar {
+  display: none;
+}
+
+.hero-lyric-lines {
+  min-height: 100%;
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  padding: 24% 0;
+}
+
+.hero-lyric-lines p {
+  margin: 0;
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+  font-family: var(--font-serif);
+  font-size: clamp(1.02rem, 1.35vw, 1.34rem);
+  font-weight: 760;
+  line-height: 1.55;
+  text-align: center;
+  overflow-wrap: anywhere;
+  transform: scale(0.98);
+  transition:
+    color 260ms ease,
+    opacity 260ms ease,
+    transform 260ms ease;
+}
+
+.hero-lyric-lines p.active {
+  color: var(--ink);
+  opacity: 1;
+  transform: scale(1);
 }
 
 .hero-player-card {
@@ -929,6 +1004,31 @@ textarea:focus-visible {
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(18px);
   overflow: hidden;
+  transition:
+    border-radius 920ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 720ms ease,
+    padding 920ms cubic-bezier(0.16, 1, 0.3, 1),
+    background 720ms ease;
+}
+
+.hero-player-card.is-playing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "player-now player-controls player-link"
+    "player-progress player-controls player-link";
+  align-items: center;
+  gap: 4px 12px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border-radius: 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+.hero-player-card.is-playing header,
+.hero-player-card.is-playing .hero-player-queue {
+  display: none;
 }
 
 .hero-player-card header,
@@ -1182,6 +1282,82 @@ textarea:focus-visible {
 
 .hero-player-link:hover {
   color: var(--red);
+}
+
+.hero-player-card.is-playing .hero-player-now {
+  grid-area: player-now;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 12px;
+  align-self: center;
+}
+
+.hero-player-card.is-playing .hero-player-now img {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+}
+
+.hero-player-card.is-playing .hero-player-now strong {
+  font-family: var(--font-sans);
+  font-size: 0.98rem;
+  font-weight: 850;
+}
+
+.hero-player-card.is-playing .hero-player-now p {
+  margin-top: 2px;
+  font-size: 0.76rem;
+}
+
+.hero-player-card.is-playing .hero-player-progress {
+  grid-area: player-progress;
+  align-self: center;
+  margin-left: 66px;
+  --hero-progress-track-height: 4px;
+  --hero-progress-thumb-size: 12px;
+  height: 12px;
+}
+
+.hero-player-card.is-playing .hero-player-controls {
+  grid-area: player-controls;
+  align-self: center;
+  justify-content: end;
+  gap: 6px;
+  padding: 0;
+}
+
+.hero-player-card.is-playing .hero-player-controls button {
+  width: 34px;
+  height: 34px;
+}
+
+.hero-player-card.is-playing .hero-player-controls .hero-play-button {
+  width: 40px;
+  height: 40px;
+  color: var(--surface);
+  background: var(--ink);
+  box-shadow: none;
+}
+
+.hero-player-card.is-playing .hero-player-link {
+  grid-area: player-link;
+  align-self: center;
+  justify-self: end;
+  width: 34px;
+  height: 34px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  box-shadow: none;
+  opacity: 0.82;
+}
+
+.hero-player-card.is-playing .hero-player-link span {
+  display: none;
 }
 
 .console-card,
@@ -3035,10 +3211,19 @@ html.dark-mode .recent-card--game {
     grid-column: 1 / -1;
     min-height: 0;
     height: auto;
+    grid-template-rows: auto;
     grid-template-columns: minmax(0, 1fr);
     align-items: stretch;
     justify-items: center;
     overflow: visible;
+  }
+
+  .hero-console.is-playing {
+    grid-template-rows: auto;
+  }
+
+  .hero-lyric-stage {
+    display: none;
   }
 
   .hero-player-card {
@@ -3053,6 +3238,16 @@ html.dark-mode .recent-card--game {
     justify-self: stretch;
     padding: 16px 20px;
     border-radius: 18px;
+  }
+
+  .hero-player-card.is-playing {
+    position: static;
+    display: grid;
+    grid-template-rows: none;
+    gap: 10px 18px;
+    padding: 16px 20px;
+    border-radius: 18px;
+    box-shadow: var(--shadow-sm);
   }
 
   .hero-copy h1 span {
@@ -3090,7 +3285,18 @@ html.dark-mode .recent-card--game {
     gap: 11px;
   }
 
+  .hero-player-card.is-playing .hero-player-now {
+    grid-template-columns: 56px minmax(0, 1fr);
+    gap: 11px;
+  }
+
   .hero-player-now img {
+    width: 56px;
+    height: 56px;
+    border-radius: 12px;
+  }
+
+  .hero-player-card.is-playing .hero-player-now img {
     width: 56px;
     height: 56px;
     border-radius: 12px;
@@ -3104,7 +3310,17 @@ html.dark-mode .recent-card--game {
     padding: 0;
   }
 
+  .hero-player-card.is-playing .hero-player-controls {
+    gap: 4px;
+    padding: 0;
+  }
+
   .hero-player-controls button {
+    width: 36px;
+    height: 36px;
+  }
+
+  .hero-player-card.is-playing .hero-player-controls button {
     width: 36px;
     height: 36px;
   }
@@ -3115,12 +3331,27 @@ html.dark-mode .recent-card--game {
     height: 14px;
   }
 
+  .hero-player-card.is-playing .hero-player-progress {
+    position: relative;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    margin-left: 0;
+    --hero-progress-thumb-size: 14px;
+    height: 14px;
+  }
+
   .hero-player-now p {
     margin-top: 3px;
     font-size: 0.78rem;
   }
 
   .hero-player-controls .hero-play-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .hero-player-card.is-playing .hero-player-controls .hero-play-button {
     width: 44px;
     height: 44px;
   }
@@ -3140,6 +3371,18 @@ html.dark-mode .recent-card--game {
     display: grid;
     place-items: center;
     color: var(--ink);
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .hero-player-card.is-playing .hero-player-link {
+    width: 40px;
+    height: 40px;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
     background: transparent;
     border: 0;
     border-radius: 0;

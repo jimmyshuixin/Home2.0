@@ -1,5 +1,5 @@
 <script setup>
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   ArrowRight,
   Camera,
@@ -62,10 +62,13 @@ const {
 const showVideoModal = ref(false);
 const isDouyinOpen = ref(false);
 const isDesktopViewport = ref(false);
+const heroLyricScroller = ref(null);
+const heroPlayerExpanded = ref(false);
 const contactMode = ref('email');
 const gameUid = '188938401';
 const uidCopyStatus = ref('');
 let uidCopyTimer;
+let heroPlayerAnimationTimer;
 
 const fitnessDayCount = computed(() => {
   const today = new Date();
@@ -116,6 +119,7 @@ onBeforeUnmount(() => {
   desktopMediaQuery?.removeEventListener('change', syncDesktopViewport);
   window.removeEventListener('keydown', handleEscape);
   window.clearTimeout(uidCopyTimer);
+  window.clearTimeout(heroPlayerAnimationTimer);
   document.body.style.overflow = '';
 });
 
@@ -152,9 +156,44 @@ const heroLyricIndex = computed(() => {
   return Math.min(index, heroLyricLines.value.length - 1);
 });
 
-const heroLyricStyle = computed(() => ({
-  transform: `translateY(-${Math.max(0, heroLyricIndex.value - 1) * 38}px)`,
-}));
+watch(
+  () => [heroLyricIndex.value, heroPlayerExpanded.value],
+  async ([index, isExpanded]) => {
+    if (!isExpanded || index < 0) return;
+    await nextTick();
+    const scroller = heroLyricScroller.value;
+    const activeLine = scroller?.querySelector(`[data-hero-lyric-index="${index}"]`);
+    if (!scroller || !activeLine) return;
+    const nextTop = activeLine.offsetTop - scroller.clientHeight / 2 + activeLine.clientHeight / 2;
+    scroller.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' });
+  },
+);
+
+const scheduleHeroPlayerExpanded = (expanded, delay = expanded ? 380 : 680, requirePlaying = false) => {
+  window.clearTimeout(heroPlayerAnimationTimer);
+  heroPlayerAnimationTimer = window.setTimeout(() => {
+    if (requirePlaying && !musicState.isPlaying) return;
+    heroPlayerExpanded.value = expanded;
+  }, delay);
+};
+
+const toggleHeroPlay = async () => {
+  const shouldExpand = !musicState.isPlaying;
+  await togglePlay();
+  if (shouldExpand) {
+    scheduleHeroPlayerExpanded(true, 380, true);
+    return;
+  }
+  scheduleHeroPlayerExpanded(false);
+};
+
+watch(
+  () => musicState.isPlaying,
+  (isPlaying) => {
+    if (isPlaying || !heroPlayerExpanded.value) return;
+    scheduleHeroPlayerExpanded(false, 900);
+  },
+);
 
 const musicDockProps = computed(() => ({
   song: currentSong.value,
@@ -279,8 +318,23 @@ const musicDockEvents = {
             </div>
           </div>
 
-          <aside class="hero-console" aria-label="首页音乐与留言">
-            <section class="hero-player-card" aria-label="首页音乐播放器">
+          <aside class="hero-console" :class="{ 'is-playing': heroPlayerExpanded }" aria-label="首页音乐与留言">
+            <section class="hero-lyric-stage" :aria-hidden="!heroPlayerExpanded" aria-label="首页歌词">
+              <div ref="heroLyricScroller" class="hero-lyric-window" aria-live="polite">
+                <div class="hero-lyric-lines">
+                  <p
+                    v-for="(line, index) in heroLyricLines"
+                    :key="`${line.time}-${line.text}`"
+                    :data-hero-lyric-index="index"
+                    :class="{ active: index === heroLyricIndex }"
+                  >
+                    {{ line.text }}
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            <section class="hero-player-card" :class="{ 'is-playing': heroPlayerExpanded }" aria-label="首页音乐播放器">
               <header>
                 <span><Music2 :size="16" /> 正在播放</span>
               </header>
@@ -310,7 +364,7 @@ const musicDockEvents = {
                 <button type="button" aria-label="Previous song" :disabled="!canControlMusic" @click="previousSong">
                   <SkipBack :size="20" />
                 </button>
-                <button class="hero-play-button" type="button" :aria-label="musicState.isPlaying ? 'Pause' : 'Play'" :disabled="!canControlMusic" @click="togglePlay">
+                <button class="hero-play-button" type="button" :aria-label="musicState.isPlaying ? 'Pause' : 'Play'" :disabled="!canControlMusic" @click="toggleHeroPlay">
                   <Pause v-if="musicState.isPlaying" :size="24" />
                   <Play v-else :size="24" />
                 </button>

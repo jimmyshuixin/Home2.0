@@ -111,10 +111,11 @@ watch(
   async ([index]) => {
     if ((props.instanceId !== 'hero' && activePanel.value !== 'lyrics') || index < 0) return;
     await nextTick();
-    lyricScroller.value?.querySelector(`[data-lyric-index="${index}"]`)?.scrollIntoView({
-      block: 'center',
-      behavior: 'smooth',
-    });
+    const scroller = lyricScroller.value;
+    const activeLine = scroller?.querySelector(`[data-lyric-index="${index}"]`);
+    if (!scroller || !activeLine) return;
+    const nextTop = activeLine.offsetTop - scroller.clientHeight / 2 + activeLine.clientHeight / 2;
+    scroller.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' });
   },
 );
 </script>
