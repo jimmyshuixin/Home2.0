@@ -1,5 +1,26 @@
-import { computed, onMounted, reactive } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive } from 'vue';
 import { fallbackRepos, siteConfig } from '../data/site';
+
+const scheduleIdleTask = (callback, delay = 1400) => {
+  if (typeof window === 'undefined') return () => {};
+
+  let idleId;
+  const timeoutId = window.setTimeout(() => {
+    if ('requestIdleCallback' in window) {
+      idleId = window.requestIdleCallback(() => {
+        void callback();
+      }, { timeout: 4000 });
+      return;
+    }
+
+    void callback();
+  }, delay);
+
+  return () => {
+    window.clearTimeout(timeoutId);
+    if (idleId) window.cancelIdleCallback?.(idleId);
+  };
+};
 
 export function useGithubData() {
   const github = reactive({
@@ -20,10 +41,13 @@ export function useGithubData() {
 
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 7000);
-    const response = await fetch(url.toString(), { signal: controller.signal });
-    window.clearTimeout(timeoutId);
-    if (!response.ok) throw new Error('GitHub data unavailable');
-    return response.json();
+    try {
+      const response = await fetch(url.toString(), { signal: controller.signal });
+      if (!response.ok) throw new Error('GitHub data unavailable');
+      return response.json();
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   };
 
   const load = async () => {
@@ -75,7 +99,14 @@ export function useGithubData() {
     return [...pinned, ...recent].slice(0, 4).length ? [...pinned, ...recent].slice(0, 4) : fallbackRepos;
   });
 
-  onMounted(load);
+  let cancelInitialLoad;
+  onMounted(() => {
+    cancelInitialLoad = scheduleIdleTask(load);
+  });
+
+  onBeforeUnmount(() => {
+    cancelInitialLoad?.();
+  });
 
   return { github, featuredRepos, reloadGithub: load };
 }

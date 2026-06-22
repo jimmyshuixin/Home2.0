@@ -1,0 +1,38 @@
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/content/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/content/icon/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/content/visuals/*
+  Cache-Control: public, max-age=2592000, stale-while-revalidate=86400
+
+/content/recent/*
+  Cache-Control: public, max-age=2592000, stale-while-revalidate=86400
+
+/content/game/*
+  Cache-Control: public, max-age=2592000, stale-while-revalidate=86400
+
+/content/music/*
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+
+/content/*
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+
+/
+  Cache-Control: public, max-age=0, must-revalidate
+
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/contact.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/deepseek.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/version/*
+  Cache-Control: public, max-age=0, must-revalidate

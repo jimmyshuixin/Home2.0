@@ -1,13 +1,10 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue';
 import {
-  CheckCircle2,
   ListMusic,
-  LogIn,
   Music2,
   Pause,
   Play,
-  QrCode,
   RefreshCw,
   Repeat,
   Shuffle,
@@ -31,14 +28,6 @@ const props = defineProps({
   isPlaying: { type: Boolean, required: true },
   isLoading: { type: Boolean, default: false },
   isLibraryOpen: { type: Boolean, default: false },
-  isLoggedIn: { type: Boolean, default: false },
-  isLoginOpen: { type: Boolean, default: false },
-  isPollingLogin: { type: Boolean, default: false },
-  loginStatus: { type: String, default: 'idle' },
-  loginMessage: { type: String, default: '' },
-  qrImage: { type: String, default: '' },
-  qrUrl: { type: String, default: '' },
-  scanApp: { type: String, default: '' },
   source: { type: String, default: 'local' },
   error: { type: String, default: '' },
   progressText: { type: String, required: true },
@@ -55,9 +44,6 @@ const emit = defineEmits([
   'select-track',
   'seek',
   'refresh',
-  'start-login',
-  'cancel-login',
-  'logout',
   'load-custom',
 ]);
 
@@ -136,7 +122,7 @@ watch(
 <template>
   <aside class="music-dock" :class="{ 'is-expanded': isLibraryOpen, 'is-playing': isPlaying }" aria-label="Music player">
     <div class="music-dock-main">
-      <img class="music-cover" :class="{ 'is-playing': isPlaying }" :src="coverSrc" :alt="`${song.name} cover`" />
+      <img class="music-cover" :class="{ 'is-playing': isPlaying }" :src="coverSrc" :alt="`${song.name} cover`" width="56" height="56" decoding="async" />
 
       <div class="music-now">
         <div class="music-title-row">
@@ -205,7 +191,7 @@ watch(
 
         <section class="hero-sheet-column hero-sheet-now" aria-label="Current song and playlists">
           <div class="hero-sheet-now-card">
-            <img class="hero-sheet-cover" :src="coverSrc" :alt="`${song.name} cover`" />
+            <img class="hero-sheet-cover" :src="coverSrc" :alt="`${song.name} cover`" width="180" height="180" loading="lazy" decoding="async" />
             <div class="hero-sheet-current">
               <span>正在播放</span>
               <strong>{{ song.name }}</strong>
@@ -297,7 +283,7 @@ watch(
               @click="chooseTrack(index, track)"
             >
               <span class="queue-index">{{ padTrack(index) }}</span>
-              <img class="queue-cover" :src="track.cover" :alt="`${track.name} cover`" />
+              <img class="queue-cover" :src="track.cover" :alt="`${track.name} cover`" width="44" height="44" loading="lazy" decoding="async" />
               <span class="queue-meta">
                 <strong>{{ track.name }}</strong>
                 <small>{{ track.artist || 'Unknown Artist' }}</small>
@@ -326,26 +312,7 @@ watch(
             </p>
           </div>
 
-          <div class="music-source-panel hero-sheet-login">
-            <div class="music-login-row" :class="loginStatus">
-              <div>
-                <span v-if="isLoggedIn"><CheckCircle2 :size="16" /> 登录有效</span>
-                <span v-else><QrCode :size="16" /> 扫码登录</span>
-                <small v-if="loginMessage">{{ loginMessage }}</small>
-              </div>
-              <button v-if="isLoggedIn" type="button" class="text-button" @click="$emit('logout')">退出</button>
-              <button v-else type="button" class="text-button" :disabled="isPollingLogin" @click="$emit('start-login')">
-                <LogIn :size="15" /> {{ isPollingLogin ? '等待中' : '扫码' }}
-              </button>
-            </div>
-
-            <div v-if="isLoginOpen" class="music-qr-box">
-              <img v-if="qrImage" :src="qrImage" :alt="`Scan with ${scanApp || 'music app'}`" />
-              <a v-else-if="qrUrl" :href="qrUrl" target="_blank" rel="noreferrer">打开登录二维码</a>
-              <span v-else>正在生成二维码...</span>
-              <button type="button" class="text-button" @click="$emit('cancel-login')">取消</button>
-            </div>
-
+          <div class="music-source-panel hero-sheet-source">
             <form class="playlist-import" @submit.prevent="submitCustomPlaylist">
               <label :for="playlistInputId">歌单 ID</label>
               <div>
@@ -400,7 +367,7 @@ watch(
             @click="chooseTrack(index, track)"
           >
             <span class="queue-index">{{ padTrack(index) }}</span>
-            <img class="queue-cover" :src="track.cover" :alt="`${track.name} cover`" />
+            <img class="queue-cover" :src="track.cover" :alt="`${track.name} cover`" width="44" height="44" loading="lazy" decoding="async" />
             <span class="queue-meta">
               <strong>{{ track.name }}</strong>
               <small>{{ track.artist || 'Unknown Artist' }}</small>
@@ -418,12 +385,12 @@ watch(
             <ListMusic :size="15" /> 歌词
           </button>
           <button type="button" :class="{ active: activePanel === 'source' }" role="tab" :aria-selected="activePanel === 'source'" @click="activePanel = 'source'">
-            <QrCode :size="15" /> 来源
+            <Music2 :size="15" /> 歌单
           </button>
         </div>
 
         <div v-show="activePanel === 'queue'" class="music-panel-view now-panel">
-          <img :src="coverSrc" :alt="`${song.name} cover`" />
+          <img :src="coverSrc" :alt="`${song.name} cover`" width="120" height="120" loading="lazy" decoding="async" />
           <div>
             <span>当前</span>
             <strong>{{ song.name }}</strong>
@@ -445,25 +412,6 @@ watch(
         </div>
 
         <div v-show="activePanel === 'source'" class="music-panel-view music-source-panel">
-          <div class="music-login-row" :class="loginStatus">
-            <div>
-              <span v-if="isLoggedIn"><CheckCircle2 :size="16" /> 登录有效</span>
-              <span v-else><QrCode :size="16" /> 扫码登录</span>
-              <small v-if="loginMessage">{{ loginMessage }}</small>
-            </div>
-            <button v-if="isLoggedIn" type="button" class="text-button" @click="$emit('logout')">退出</button>
-            <button v-else type="button" class="text-button" :disabled="isPollingLogin" @click="$emit('start-login')">
-              <LogIn :size="15" /> {{ isPollingLogin ? '等待中' : '扫码' }}
-            </button>
-          </div>
-
-          <div v-if="isLoginOpen" class="music-qr-box">
-            <img v-if="qrImage" :src="qrImage" :alt="`Scan with ${scanApp || 'music app'}`" />
-            <a v-else-if="qrUrl" :href="qrUrl" target="_blank" rel="noreferrer">打开登录二维码</a>
-            <span v-else>正在生成二维码...</span>
-            <button type="button" class="text-button" @click="$emit('cancel-login')">取消</button>
-          </div>
-
           <form class="playlist-import" @submit.prevent="submitCustomPlaylist">
             <label :for="playlistInputId">歌单 ID</label>
             <div>

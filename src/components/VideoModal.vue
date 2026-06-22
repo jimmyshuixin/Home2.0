@@ -19,6 +19,7 @@ defineEmits(['close']);
           <iframe
             :src="siteConfig.bilibiliVideo"
             title="年度摄影记录"
+            loading="lazy"
             scrolling="no"
             frameborder="0"
             allow="autoplay; fullscreen; picture-in-picture"

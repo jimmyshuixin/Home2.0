@@ -18,6 +18,7 @@ await Promise.all([
   copyIfExists('icon'),
   copyIfExists('worker'),
   copyIfExists('version'),
+  copyIfExists('_headers'),
   copyIfExists('LICENSE'),
   copyIfExists('README.md'),
 ]);

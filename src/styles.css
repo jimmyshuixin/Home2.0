@@ -1,6 +1,6 @@
 @font-face {
   font-family: "DuanNingCaoShu";
-  src: url("/content/fonts/DuanNingCaoShu.ttf") format("truetype");
+  src: url("/content/fonts/DuanNingCaoShu-subset.woff") format("woff");
   font-display: swap;
 }
 
@@ -1256,6 +1256,8 @@ textarea:focus-visible {
   margin: 0 auto;
   padding: 82px 0;
   scroll-margin-top: 96px;
+  content-visibility: auto;
+  contain-intrinsic-size: 720px;
 }
 
 .journal-section + .journal-section {
@@ -1662,7 +1664,6 @@ html.dark-mode .recent-card--game {
 .queue-meta small,
 .music-subtitle,
 .music-panel-header span,
-.music-login-row small,
 .playlist-toolbar,
 .status-line {
   color: var(--muted);
@@ -2201,7 +2202,6 @@ html.dark-mode .recent-card--game {
 
 .music-panel-header,
 .playlist-toolbar,
-.music-login-row,
 .playlist-import div {
   min-width: 0;
   display: flex;
@@ -2374,50 +2374,6 @@ html.dark-mode .recent-card--game {
   display: block;
   width: 100%;
   max-width: 100%;
-}
-
-.music-login-row,
-.music-qr-box {
-  max-width: 100%;
-  padding: 10px 12px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-.music-login-row span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 850;
-}
-
-.music-login-row small {
-  display: block;
-  margin-top: 2px;
-  font-size: 0.78rem;
-}
-
-.music-login-row.success {
-  border-color: color-mix(in srgb, var(--success) 48%, var(--line));
-}
-
-.music-login-row.error {
-  border-color: color-mix(in srgb, var(--danger) 50%, var(--line));
-}
-
-.music-qr-box {
-  display: grid;
-  justify-items: center;
-  gap: 10px;
-}
-
-.music-qr-box img {
-  width: 158px;
-  height: 158px;
-  image-rendering: crisp-edges;
-  border-radius: 12px;
 }
 
 .playlist-import {
@@ -2608,13 +2564,8 @@ html.dark-mode .recent-card--game {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-.hero-sheet-login {
+.hero-sheet-source {
   align-content: start;
-}
-
-.hero-sheet-login .music-qr-box img {
-  width: 128px;
-  height: 128px;
 }
 
 .back-to-top {
@@ -3317,6 +3268,10 @@ html.dark-mode .recent-card--game {
     text-align: center;
   }
 
+  .hero-danmaku-layer {
+    display: none;
+  }
+
   .hero-copy h1 span {
     display: inline-block;
     font-size: clamp(5.4rem, 20vw, 7.1rem);
@@ -3376,6 +3331,7 @@ html.dark-mode .recent-card--game {
 
   .portrait-frame img {
     aspect-ratio: 0.9;
+    filter: none;
   }
 
   .portrait-card figcaption {
@@ -3595,8 +3551,7 @@ html.dark-mode .recent-card--game {
 
   .music-source-panel,
   .playlist-import,
-  .playlist-import div,
-  .music-login-row {
+  .playlist-import div {
     width: 100%;
     max-width: 100%;
   }

@@ -8,6 +8,27 @@ const demoMessages = [
   { name: 'Sakura', message: '未来可期，保持热爱！', createdAt: '2025-05-12' },
 ];
 
+const scheduleIdleTask = (callback, delay = 1800) => {
+  if (typeof window === 'undefined') return () => {};
+
+  let idleId;
+  const timeoutId = window.setTimeout(() => {
+    if ('requestIdleCallback' in window) {
+      idleId = window.requestIdleCallback(() => {
+        void callback();
+      }, { timeout: 4000 });
+      return;
+    }
+
+    void callback();
+  }, delay);
+
+  return () => {
+    window.clearTimeout(timeoutId);
+    if (idleId) window.cancelIdleCallback?.(idleId);
+  };
+};
+
 export function useGuestbook() {
   const guestbook = reactive({
     messages: demoMessages,
@@ -18,6 +39,7 @@ export function useGuestbook() {
   });
   const activeNotes = ref([]);
   let refreshTimer;
+  let cancelInitialFetch;
 
   const syncHeroNotes = (source = demoMessages) => {
     const notes = (Array.isArray(source) && source.length ? source : demoMessages).slice(0, 8);
@@ -34,11 +56,13 @@ export function useGuestbook() {
   };
 
   const fetchMessages = async () => {
+    if (document.visibilityState === 'hidden') return;
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 5000);
+
     try {
-      const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 5000);
       const response = await fetch(siteConfig.guestbookApiUrl, { signal: controller.signal });
-      window.clearTimeout(timeoutId);
       if (!response.ok) throw new Error('Guestbook unavailable');
       const messages = await response.json();
       if (Array.isArray(messages) && messages.length) {
@@ -47,6 +71,8 @@ export function useGuestbook() {
       }
     } catch {
       syncHeroNotes(demoMessages);
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   };
 
@@ -81,11 +107,14 @@ export function useGuestbook() {
 
   onMounted(() => {
     syncHeroNotes(demoMessages);
-    fetchMessages();
-    refreshTimer = window.setInterval(fetchMessages, 15000);
+    cancelInitialFetch = scheduleIdleTask(() => {
+      fetchMessages();
+      refreshTimer = window.setInterval(fetchMessages, 60000);
+    }, 2200);
   });
 
   onBeforeUnmount(() => {
+    cancelInitialFetch?.();
     if (refreshTimer) window.clearInterval(refreshTimer);
   });
 

@@ -93,7 +93,7 @@ onBeforeUnmount(() => {
             <span class="douyin-mark" aria-hidden="true">抖</span>
           </button>
           <div class="douyin-popover" role="tooltip">
-            <img src="/content/social/douyin-qr.jpg" alt="虚宁的抖音二维码" />
+            <img src="/content/social/douyin-qr.jpg" alt="虚宁的抖音二维码" width="1313" height="1408" loading="lazy" decoding="async" />
             <strong id="douyin-hover-label">抖音 · 虚宁</strong>
             <span>扫码关注 tidingjinluo</span>
           </div>
@@ -122,7 +122,7 @@ onBeforeUnmount(() => {
         </button>
         <p>扫码关注</p>
         <h2 id="douyin-modal-title">虚宁的抖音</h2>
-        <img src="/content/social/douyin-qr.jpg" alt="虚宁的抖音二维码" />
+        <img src="/content/social/douyin-qr.jpg" alt="虚宁的抖音二维码" width="1313" height="1408" loading="lazy" decoding="async" />
         <span>抖音号：tidingjinluo</span>
       </section>
     </div>
@@ -135,7 +135,7 @@ onBeforeUnmount(() => {
           <X :size="22" />
         </button>
         <div class="drawer-profile">
-          <img src="/content/visuals/field-portrait.png" alt="虚宁头像" />
+          <img src="/content/visuals/field-portrait.webp" alt="虚宁头像" width="1100" height="1100" loading="lazy" decoding="async" />
           <div>
             <strong>虚宁</strong>
             <p>记录成长，也记录热爱</p>

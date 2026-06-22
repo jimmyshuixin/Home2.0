@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   ArrowRight,
   Camera,
@@ -25,7 +25,6 @@ import {
 import ChapterHeading from './components/ChapterHeading.vue';
 import MusicDock from './components/MusicDock.vue';
 import SiteHeader from './components/SiteHeader.vue';
-import VideoModal from './components/VideoModal.vue';
 import { useContact } from './composables/useContact';
 import { useGithubData } from './composables/useGithubData';
 import { useGuestbook } from './composables/useGuestbook';
@@ -34,6 +33,8 @@ import { useScrollState } from './composables/useScrollState';
 import { useTheme } from './composables/useTheme';
 import { navItems, resumeData, siteConfig } from './data/site';
 
+const VideoModal = defineAsyncComponent(() => import('./components/VideoModal.vue'));
+
 const { isDark, toggleTheme } = useTheme();
 const { progress, showBackToTop, activeSection, isNavHidden, scrollTo, scrollToTop } = useScrollState();
 const { github, featuredRepos } = useGithubData();
@@ -41,10 +42,8 @@ const { guestbook, activeNotes, submitGuestbook } = useGuestbook();
 const { contact, submitContact } = useContact();
 const {
   activeLyricIndex,
-  cancelQrLogin,
   currentSong,
   loadCustomPlaylist,
-  logoutMusic,
   lyrics,
   musicState,
   nextSong,
@@ -55,7 +54,6 @@ const {
   refreshPlaylist,
   seekTo,
   selectTrack,
-  startQrLogin,
   switchPlaylist,
   togglePlay,
   togglePlayMode,
@@ -173,14 +171,6 @@ const musicDockProps = computed(() => ({
   isPlaying: musicState.isPlaying,
   isLoading: musicState.isLoading,
   isLibraryOpen: musicState.isLibraryOpen,
-  isLoggedIn: musicState.isLoggedIn,
-  isLoginOpen: musicState.isLoginOpen,
-  isPollingLogin: musicState.isPollingLogin,
-  loginStatus: musicState.loginStatus,
-  loginMessage: musicState.loginMessage,
-  qrImage: musicState.qrImage,
-  qrUrl: musicState.qrUrl,
-  scanApp: musicState.scanApp,
   source: musicState.source,
   error: musicState.error,
   progressText: progressText.value,
@@ -198,9 +188,6 @@ const musicDockEvents = {
   },
   'select-playlist': switchPlaylist,
   refresh: refreshPlaylist,
-  'start-login': startQrLogin,
-  'cancel-login': cancelQrLogin,
-  logout: logoutMusic,
   'load-custom': loadCustomPlaylist,
 };
 </script>
@@ -223,7 +210,7 @@ const musicDockEvents = {
           </button>
           <p>扫码关注</p>
           <h2 id="photography-douyin-title">虚宁的抖音</h2>
-          <img src="/content/social/douyin-qr.jpg" alt="虚宁的抖音二维码" />
+          <img src="/content/social/douyin-qr.jpg" alt="虚宁的抖音二维码" width="1313" height="1408" loading="lazy" decoding="async" />
           <span>抖音号：tidingjinluo</span>
         </section>
       </div>
@@ -246,7 +233,7 @@ const musicDockEvents = {
         <div class="hero-grid">
           <figure class="portrait-card">
             <div class="portrait-frame">
-              <img src="/content/visuals/field-portrait.png" alt="虚宁手绘头像" />
+              <img src="/content/visuals/field-portrait.webp" alt="虚宁手绘头像" width="1100" height="1100" fetchpriority="high" decoding="async" />
             </div>
           </figure>
 
@@ -299,7 +286,7 @@ const musicDockEvents = {
               </header>
 
               <div class="hero-player-now">
-                <img :src="currentSong.cover || '/content/icon/32.png'" :alt="`${currentSong.name} cover`" />
+                <img :src="currentSong.cover || '/content/icon/32.png'" :alt="`${currentSong.name} cover`" width="74" height="74" decoding="async" />
                 <div>
                   <strong>{{ currentSong.name }}</strong>
                   <span>{{ currentSong.artist || 'Unknown Artist' }}</span>
@@ -376,11 +363,11 @@ const musicDockEvents = {
             <div class="recent-fitness__track" aria-hidden="true">
               <span></span><span></span><span></span><span></span><span></span>
             </div>
-            <img src="/content/recent/fitness-cover.png" alt="健身训练记录封面" />
+            <img src="/content/recent/fitness-cover.webp" alt="健身训练记录封面" width="900" height="1200" loading="lazy" decoding="async" />
           </article>
 
           <article class="recent-card recent-card--photography">
-            <img src="/content/recent/photography-cover.jpg" alt="暖色灯光摄影作品" />
+            <img src="/content/recent/photography-cover.webp" alt="暖色灯光摄影作品" width="1400" height="933" loading="lazy" decoding="async" />
             <div class="recent-card__topline recent-card__topline--light">
               <span>02 / PHOTOGRAPHY</span>
               <Camera :size="22" aria-hidden="true" />
@@ -410,7 +397,7 @@ const musicDockEvents = {
               </button>
             </div>
             <div class="recent-game__orbit" aria-hidden="true"></div>
-            <img src="/content/game/Furina1.png" alt="原神角色芙宁娜" />
+            <img src="/content/game/Furina1.webp" alt="原神角色芙宁娜" width="760" height="1042" loading="lazy" decoding="async" />
           </article>
         </div>
 

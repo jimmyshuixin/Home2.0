@@ -21,7 +21,7 @@ export const siteConfig = {
   guestbookApiUrl: 'https://firebase.xvyin.com/messages',
   emailApiUrl: 'https://email.xvyin.com',
   music: {
-    apiUrl: import.meta.env.VITE_MUSIC_API_URL || 'https://home-music-api.jimmyai3132.workers.dev/',
+    apiUrl: import.meta.env.VITE_MUSIC_API_URL || 'https://music.xvyin.com/',
     server: import.meta.env.VITE_MUSIC_SERVER || 'tencent',
     type: import.meta.env.VITE_MUSIC_TYPE || 'playlist',
     playlistId: import.meta.env.VITE_MUSIC_PLAYLIST_ID || '9206816111',
