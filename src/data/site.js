@@ -1,4 +1,5 @@
 import undergraduateResume from '../../content/resume/undergraduate.json';
+import masterResume from '../../content/resume/master.json';
 import localPlaylistsSource from '../../content/music/local_playlists.json';
 import musicSource from '../../content/music/music.json';
 
@@ -15,6 +16,10 @@ export const siteConfig = {
   englishName: 'Xu Ning',
   githubUser: 'jimmyshuixin',
   githubProfile: 'https://github.com/jimmyshuixin',
+  douyin: {
+    handle: 'tidingjinluo',
+    name: '虚宁',
+  },
   bilibiliVideo:
     'https://player.bilibili.com/player.html?bvid=BV1b5ZpBsELe&page=1&high_quality=1&danmaku=0&autoplay=1',
   githubApiUrl: 'https://github.xvyin.com/',
@@ -52,6 +57,19 @@ export const navItems = [
 ];
 
 export const resumeData = {
+  education: [
+    ...undergraduateResume.education.map((item) => ({
+      ...item,
+      stage: '本科',
+      location: undergraduateResume.location,
+    })),
+    ...masterResume.education.map((item) => ({
+      ...item,
+      stage: '研究生',
+      location: masterResume.location,
+    })),
+  ],
+  campusExperience: undergraduateResume.campusExperience,
   projects: undergraduateResume.projects,
   skills: undergraduateResume.skills.filter((group) => group.category !== '办公软件'),
 };

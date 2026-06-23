@@ -7,6 +7,7 @@ import {
   Dumbbell,
   Gamepad2,
   Github,
+  GraduationCap,
   ListMusic,
   Mail,
   MessageCircle,
@@ -15,6 +16,7 @@ import {
   PenLine,
   Play,
   Repeat,
+  RefreshCw,
   Rocket,
   Send,
   Shuffle,
@@ -37,7 +39,7 @@ const VideoModal = defineAsyncComponent(() => import('./components/VideoModal.vu
 
 const { isDark, toggleTheme } = useTheme();
 const { progress, showBackToTop, activeSection, isNavHidden, scrollTo, scrollToTop } = useScrollState();
-const { github, featuredRepos } = useGithubData();
+const { github, featuredRepos, reloadGithub } = useGithubData();
 const { guestbook, activeNotes, submitGuestbook } = useGuestbook();
 const { contact, submitContact } = useContact();
 const {
@@ -63,7 +65,7 @@ const showVideoModal = ref(false);
 const isDouyinOpen = ref(false);
 const isDesktopViewport = ref(false);
 const heroLyricScroller = ref(null);
-const heroPlayerExpanded = ref(false);
+const heroPlayerCompact = ref(false);
 const contactMode = ref('email');
 const gameUid = '188938401';
 const uidCopyStatus = ref('');
@@ -80,11 +82,56 @@ const siteUptime = computed(() => Math.ceil(Math.abs(new Date() - new Date(siteC
 const currentDate = computed(() =>
   new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }).format(new Date()),
 );
+const formatCompactNumber = (value) => {
+  if (github.isLoading && !github.updatedAt) return '...';
+  if (github.error && !github.updatedAt) return '-';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '-';
+  return new Intl.NumberFormat('zh-CN').format(number);
+};
+
+const formatGithubDate = (value) => {
+  if (!value) return '实时同步';
+  return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' }).format(new Date(value));
+};
+
 const repoStats = computed(() => [
-  { label: '提交贡献', value: github.stats.contributions || '326' },
-  { label: '开源仓库', value: github.stats.repos || '21' },
-  { label: '获得星标', value: github.stats.stars || '18' },
+  { label: '提交贡献', value: formatCompactNumber(github.stats.contributions) },
+  { label: '自有仓库', value: formatCompactNumber(github.stats.repos) },
+  { label: '获得星标', value: formatCompactNumber(github.stats.stars) },
 ]);
+
+const githubSyncedAt = computed(() => {
+  if (github.isLoading) return '同步中';
+  if (!github.updatedAt) return '未同步';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(github.updatedAt));
+});
+
+const parseEducationDate = (duration, useEnd = false) => {
+  const parts = String(duration || '').match(/\d{4}\.\d{2}/g);
+  const value = parts?.[useEnd ? parts.length - 1 : 0];
+  if (!value) return null;
+  const [year, month] = value.split('.').map(Number);
+  return new Date(year, useEnd ? month : month - 1, useEnd ? 0 : 1);
+};
+
+const educationTimeline = computed(() => resumeData.education.map((item) => {
+  const now = new Date();
+  const start = parseEducationDate(item.duration);
+  const end = parseEducationDate(item.duration, true);
+  const status = start && now < start ? '即将开始' : end && now > end ? '已完成' : '进行中';
+  return {
+    ...item,
+    status,
+    subtitle: [item.major, item.minor ? `辅修 ${item.minor}` : ''].filter(Boolean).join(' / '),
+    facts: [item.location, item.gpa ? `GPA ${item.gpa}` : '', item.ranking ? `排名 ${item.ranking}` : ''].filter(Boolean),
+  };
+}));
 
 const closeDouyin = () => {
   isDouyinOpen.value = false;
@@ -157,9 +204,9 @@ const heroLyricIndex = computed(() => {
 });
 
 watch(
-  () => [heroLyricIndex.value, heroPlayerExpanded.value],
-  async ([index, isExpanded]) => {
-    if (!isExpanded || index < 0) return;
+  () => [heroLyricIndex.value, heroPlayerCompact.value],
+  async ([index, isCompact]) => {
+    if (!isCompact || index < 0) return;
     await nextTick();
     const scroller = heroLyricScroller.value;
     const activeLine = scroller?.querySelector(`[data-hero-lyric-index="${index}"]`);
@@ -169,29 +216,37 @@ watch(
   },
 );
 
-const scheduleHeroPlayerExpanded = (expanded, delay = expanded ? 380 : 680, requirePlaying = false) => {
+const scheduleHeroPlayerCompact = (compact, delay = compact ? 160 : 180) => {
   window.clearTimeout(heroPlayerAnimationTimer);
   heroPlayerAnimationTimer = window.setTimeout(() => {
-    if (requirePlaying && !musicState.isPlaying) return;
-    heroPlayerExpanded.value = expanded;
+    heroPlayerCompact.value = compact;
   }, delay);
 };
 
-const toggleHeroPlay = async () => {
-  const shouldExpand = !musicState.isPlaying;
+const toggleManualPlayback = async () => {
+  const wasPlaying = musicState.isPlaying;
   await togglePlay();
-  if (shouldExpand) {
-    scheduleHeroPlayerExpanded(true, 380, true);
+  if (wasPlaying && !musicState.isPlaying) {
+    scheduleHeroPlayerCompact(false, 80);
     return;
   }
-  scheduleHeroPlayerExpanded(false);
+  if (!wasPlaying && musicState.isPlaying) scheduleHeroPlayerCompact(true, 100);
 };
+
+const toggleHeroPlay = toggleManualPlayback;
 
 watch(
   () => musicState.isPlaying,
   (isPlaying) => {
-    if (isPlaying || !heroPlayerExpanded.value) return;
-    scheduleHeroPlayerExpanded(false, 900);
+    if (!isPlaying) return;
+    scheduleHeroPlayerCompact(true, 100);
+  },
+);
+
+watch(
+  () => musicState.index,
+  () => {
+    if (musicState.isPlaying) scheduleHeroPlayerCompact(true, 120);
   },
 );
 
@@ -216,7 +271,7 @@ const musicDockProps = computed(() => ({
 }));
 
 const musicDockEvents = {
-  toggle: togglePlay,
+  toggle: toggleManualPlayback,
   next: nextSong,
   previous: previousSong,
   'select-track': selectTrack,
@@ -318,8 +373,8 @@ const musicDockEvents = {
             </div>
           </div>
 
-          <aside class="hero-console" :class="{ 'is-playing': heroPlayerExpanded }" aria-label="首页音乐与留言">
-            <section class="hero-lyric-stage" :aria-hidden="!heroPlayerExpanded" aria-label="首页歌词">
+          <aside class="hero-console" :class="{ 'is-playing': heroPlayerCompact }" aria-label="首页音乐与留言">
+            <section class="hero-lyric-stage" :aria-hidden="!heroPlayerCompact" aria-label="首页歌词">
               <div ref="heroLyricScroller" class="hero-lyric-window" aria-live="polite">
                 <div class="hero-lyric-lines">
                   <p
@@ -334,7 +389,7 @@ const musicDockEvents = {
               </div>
             </section>
 
-            <section class="hero-player-card" :class="{ 'is-playing': heroPlayerExpanded }" aria-label="首页音乐播放器">
+            <section class="hero-player-card" :class="{ 'is-playing': heroPlayerCompact }" aria-label="首页音乐播放器">
               <header>
                 <span><Music2 :size="16" /> 正在播放</span>
               </header>
@@ -455,6 +510,24 @@ const musicDockEvents = {
           </article>
         </div>
 
+        <div class="education-timeline" aria-label="求学历程时间线">
+          <div class="education-timeline__heading">
+            <span>EDUCATION PATH</span>
+            <h3><GraduationCap :size="20" /> 求学历程</h3>
+          </div>
+          <ol class="education-timeline__track">
+            <li v-for="item in educationTimeline" :key="`${item.stage}-${item.institution}`" :class="{ active: item.status === '进行中', future: item.status === '即将开始' }">
+              <time>{{ item.duration }}</time>
+              <strong>{{ item.stage }} · {{ item.institution }}</strong>
+              <p>{{ item.subtitle }}</p>
+              <div class="education-timeline__facts">
+                <span v-for="fact in item.facts" :key="fact">{{ fact }}</span>
+                <span>{{ item.status }}</span>
+              </div>
+            </li>
+          </ol>
+        </div>
+
       </section>
 
       <section id="tech" class="journal-section">
@@ -480,9 +553,14 @@ const musicDockEvents = {
           </article>
 
           <article class="notebook-panel github-panel">
-            <h3><Github :size="20" /> 开源贡献</h3>
-            <div class="github-heatmap" aria-label="GitHub contribution heatmap">
-              <span v-for="n in 104" :key="n" :class="`level-${(n * 7) % 5}`"></span>
+            <div class="github-panel__header">
+              <div>
+                <h3><Github :size="20" /> GitHub 实时</h3>
+                <p>通过 GitHub API 同步 · {{ githubSyncedAt }}</p>
+              </div>
+              <button class="github-refresh" type="button" :disabled="github.isLoading" aria-label="刷新 GitHub 实时数据" @click="reloadGithub">
+                <RefreshCw :size="17" />
+              </button>
             </div>
             <div class="stats-row">
               <div v-for="stat in repoStats" :key="stat.label">
@@ -490,18 +568,17 @@ const musicDockEvents = {
                 <span>{{ stat.label }}</span>
               </div>
             </div>
+            <div v-if="featuredRepos.length" class="github-mini-feed">
+              <a v-for="repo in featuredRepos" :key="repo.name" :href="repo.link" target="_blank" rel="noreferrer">
+                <div>
+                  <strong>{{ repo.name }}</strong>
+                  <p>{{ repo.description }}</p>
+                </div>
+                <span>{{ repo.language }} · ★ {{ repo.stars }} · {{ repo.isPinned ? '置顶' : `更新 ${formatGithubDate(repo.pushedAt)}` }}</span>
+              </a>
+            </div>
+            <p v-else-if="!github.isLoading" class="status-line">暂无可展示的实时仓库数据。</p>
             <p v-if="github.error" class="status-line">{{ github.error }}</p>
-          </article>
-
-          <article class="notebook-panel repo-panel">
-            <h3>置顶仓库</h3>
-            <a v-for="repo in featuredRepos" :key="repo.name" :href="repo.link" target="_blank" rel="noreferrer" class="repo-row">
-              <div>
-                <strong>{{ repo.name }}</strong>
-                <p>{{ repo.description }}</p>
-              </div>
-              <span>{{ repo.language }} · {{ repo.stars }}</span>
-            </a>
             <a class="paper-button paper-button--small" :href="siteConfig.githubProfile" target="_blank" rel="noreferrer">
               去 Github 看更多项目 <ArrowRight :size="16" />
             </a>

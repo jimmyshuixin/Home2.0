@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, onMounted, reactive } from 'vue';
-import { fallbackRepos, siteConfig } from '../data/site';
+import { siteConfig } from '../data/site';
 
 const scheduleIdleTask = (callback, delay = 1400) => {
   if (typeof window === 'undefined') return () => {};
@@ -24,10 +24,11 @@ const scheduleIdleTask = (callback, delay = 1400) => {
 
 export function useGithubData() {
   const github = reactive({
-    stats: { contributions: 0, repos: 0, stars: 0, forks: 0 },
+    stats: { contributions: 0, repos: 0, stars: 0, forks: 0, followers: 0 },
     repos: [],
     pinnedRepos: [],
     isLoading: true,
+    updatedAt: '',
     error: '',
   });
 
@@ -56,22 +57,31 @@ export function useGithubData() {
     try {
       const [statsResult, reposResult, pinnedResult] = await Promise.allSettled([
         getGithubData('stats'),
-        getGithubData('repos', { page: 1, per_page: 30 }),
+        getGithubData('repos', { page: 1, per_page: 30, sort: 'updated', direction: 'desc' }),
         getGithubData('pinned'),
       ]);
+
+      const hasSyncedData = [statsResult, reposResult, pinnedResult].some((result) => result.status === 'fulfilled');
+      if (!hasSyncedData) throw new Error('GitHub data unavailable');
 
       if (statsResult.status === 'fulfilled') {
         github.stats.repos = statsResult.value.publicRepos || 0;
         github.stats.contributions = statsResult.value.contributions || 0;
+        github.stats.followers = statsResult.value.followers || 0;
       }
       if (reposResult.status === 'fulfilled') {
         github.repos = reposResult.value || [];
-        github.stats.stars = github.repos.reduce((sum, repo) => sum + (repo.stargazers_count || 0), 0);
-        github.stats.forks = github.repos.reduce((sum, repo) => sum + (repo.forks_count || 0), 0);
+        const ownedRepos = github.repos.filter((repo) => !repo.fork);
+        github.stats.stars = ownedRepos.reduce((sum, repo) => sum + (repo.stargazers_count || 0), 0);
+        github.stats.forks = ownedRepos.reduce((sum, repo) => sum + (repo.forks_count || 0), 0);
       }
       if (pinnedResult.status === 'fulfilled') github.pinnedRepos = pinnedResult.value || [];
+      github.updatedAt = new Date().toISOString();
+      if (hasSyncedData && [statsResult, reposResult, pinnedResult].some((result) => result.status === 'rejected')) {
+        github.error = 'GitHub 部分实时数据暂不可用，已展示同步成功的内容。';
+      }
     } catch (error) {
-      github.error = '暂时无法连接 GitHub，先展示本地精选。';
+      github.error = '暂时无法连接 GitHub，实时内容已隐藏。';
     } finally {
       github.isLoading = false;
     }
@@ -83,9 +93,13 @@ export function useGithubData() {
       description: repo.description || '暂无描述',
       language: repo.language || 'Text',
       stars: repo.stars || 0,
+      forks: repo.forks || 0,
       link: repo.link || siteConfig.githubProfile,
+      pushedAt: '',
+      isPinned: true,
     }));
     const recent = github.repos
+      .filter((repo) => !repo.fork)
       .slice()
       .sort((a, b) => new Date(b.pushed_at || 0) - new Date(a.pushed_at || 0))
       .slice(0, 3)
@@ -94,9 +108,16 @@ export function useGithubData() {
         description: repo.description || '暂无描述',
         language: repo.language || 'Text',
         stars: repo.stargazers_count || 0,
+        forks: repo.forks_count || 0,
         link: repo.html_url || siteConfig.githubProfile,
+        pushedAt: repo.pushed_at || repo.updated_at || '',
+        isPinned: false,
       }));
-    return [...pinned, ...recent].slice(0, 4).length ? [...pinned, ...recent].slice(0, 4) : fallbackRepos;
+    const uniqueRepos = new Map();
+    [...pinned, ...recent].forEach((repo) => {
+      if (repo.name && !uniqueRepos.has(repo.name)) uniqueRepos.set(repo.name, repo);
+    });
+    return Array.from(uniqueRepos.values()).slice(0, 3);
   });
 
   let cancelInitialLoad;

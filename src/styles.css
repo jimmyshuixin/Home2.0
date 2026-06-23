@@ -916,8 +916,8 @@ textarea:focus-visible {
   gap: 0;
   overflow: visible;
   transition:
-    grid-template-rows 920ms cubic-bezier(0.16, 1, 0.3, 1),
-    gap 920ms cubic-bezier(0.16, 1, 0.3, 1);
+    grid-template-rows 1180ms cubic-bezier(0.16, 1, 0.3, 1),
+    gap 1180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .hero-console.is-playing {
@@ -935,8 +935,8 @@ textarea:focus-visible {
   pointer-events: none;
   transform: translateY(16px);
   transition:
-    opacity 620ms ease,
-    transform 920ms cubic-bezier(0.16, 1, 0.3, 1);
+    opacity 760ms ease,
+    transform 1180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .hero-console.is-playing .hero-lyric-stage {
@@ -1005,10 +1005,10 @@ textarea:focus-visible {
   backdrop-filter: blur(18px);
   overflow: hidden;
   transition:
-    border-radius 920ms cubic-bezier(0.16, 1, 0.3, 1),
-    box-shadow 720ms ease,
-    padding 920ms cubic-bezier(0.16, 1, 0.3, 1),
-    background 720ms ease;
+    border-radius 1180ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 880ms ease,
+    padding 1180ms cubic-bezier(0.16, 1, 0.3, 1),
+    background 880ms ease;
 }
 
 .hero-player-card.is-playing {
@@ -1819,10 +1819,183 @@ html.dark-mode .recent-card--game {
     linear-gradient(120deg, var(--surface), color-mix(in srgb, var(--surface-2) 72%, #355363));
 }
 
+.education-timeline {
+  position: relative;
+  margin-top: clamp(24px, 3vw, 34px);
+  padding: clamp(20px, 2.5vw, 28px) 0 0;
+  border-top: 1px solid var(--hairline);
+  overflow: visible;
+}
+
+.education-timeline__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+.education-timeline__heading span {
+  order: 2;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.education-timeline__heading h3 {
+  order: 1;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.education-timeline__track {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(24px, 4vw, 54px);
+  margin: 0;
+  padding: 22px 0 0;
+  list-style: none;
+}
+
+.education-timeline__track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--red) 78%, transparent),
+      color-mix(in srgb, var(--green) 60%, transparent),
+      color-mix(in srgb, var(--blue) 72%, transparent)
+    );
+  border-radius: 999px;
+  opacity: 0.72;
+}
+
+.education-timeline__track::after {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  background: var(--surface);
+  border: 2px solid var(--red);
+  border-radius: 50%;
+  box-shadow: 0 0 0 7px color-mix(in srgb, var(--red) 10%, transparent);
+  animation: timeline-sweep 8.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+.education-timeline__track li {
+  position: relative;
+  min-width: 0;
+  padding: 8px 0 0;
+  background: transparent;
+  border: 0;
+}
+
+.education-timeline__track li + li {
+  padding-left: clamp(18px, 3vw, 34px);
+  border-left: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+.education-timeline__track li::before {
+  content: "";
+  position: absolute;
+  top: -28px;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  background: var(--surface);
+  border: 2px solid var(--red);
+  border-radius: 50%;
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.education-timeline__track li.future::before {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--blue) 10%, transparent);
+}
+
+.education-timeline__track li.active::before {
+  border-color: var(--green);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--green) 14%, transparent);
+  animation: timeline-pulse 2.2s ease-in-out infinite;
+}
+
+.education-timeline__track time {
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 820;
+}
+
+.education-timeline__track strong {
+  display: block;
+  margin-top: 12px;
+  font-family: var(--font-serif);
+  font-size: clamp(1.24rem, 1.75vw, 1.62rem);
+  line-height: 1.25;
+}
+
+.education-timeline__track p {
+  margin: 8px 0 0;
+  color: var(--ink-2);
+}
+
+.education-timeline__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.education-timeline__facts span {
+  padding: 5px 9px;
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--surface-2) 56%, transparent);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 760;
+}
+
+@keyframes timeline-sweep {
+  0%, 18% {
+    transform: translateX(0);
+  }
+
+  78%, 100% {
+    transform: translateX(calc(var(--content) - 12px));
+  }
+}
+
+@keyframes timeline-pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.16);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .recent-card--photography > img,
-  .recent-card--game > img {
+  .recent-card--game > img,
+  .education-timeline__track::after,
+  .education-timeline__track li.active::before {
     transition: none;
+    animation: none;
   }
 }
 
@@ -1957,6 +2130,99 @@ html.dark-mode .recent-card--game {
 .stats-row span {
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.github-panel {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.github-panel__header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.github-panel__header h3 {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.github-panel__header p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.github-refresh {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform 160ms ease, color 160ms ease;
+}
+
+.github-refresh:hover {
+  color: var(--red);
+  transform: rotate(18deg);
+}
+
+.github-refresh:disabled {
+  opacity: 0.52;
+  cursor: wait;
+  transform: none;
+}
+
+.github-mini-feed {
+  display: grid;
+  gap: 10px;
+}
+
+.github-mini-feed a {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.github-mini-feed strong,
+.github-mini-feed p,
+.github-mini-feed span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github-mini-feed strong {
+  display: block;
+  font-weight: 850;
+}
+
+.github-mini-feed p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.github-mini-feed span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.github-panel > .paper-button {
+  margin-top: 2px;
 }
 
 .repo-panel {
@@ -3735,6 +4001,39 @@ html.dark-mode .recent-card--game {
     grid-template-columns: 1fr;
   }
 
+  .education-timeline__track::before {
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: auto;
+    width: 2px;
+    height: auto;
+  }
+
+  .education-timeline__track::after {
+    display: none;
+  }
+
+  .education-timeline__heading {
+    margin-left: 24px;
+  }
+
+  .education-timeline__track {
+    grid-template-columns: 1fr;
+    padding-left: 24px;
+    padding-top: 0;
+  }
+
+  .education-timeline__track li + li {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .education-timeline__track li::before {
+    top: 24px;
+    left: -31px;
+  }
+
   .skill-row,
   .projects-list a,
   .repo-row {
@@ -3866,6 +4165,32 @@ html.dark-mode .recent-card--game {
 
   .paper-button {
     width: 100%;
+  }
+
+  .education-timeline {
+    padding: 18px;
+  }
+
+  .education-timeline__heading {
+    display: grid;
+    justify-content: start;
+    margin-bottom: 24px;
+  }
+
+  .education-timeline__track {
+    padding-left: 18px;
+  }
+
+  .education-timeline__track li {
+    padding: 18px 16px;
+  }
+
+  .education-timeline__track li::before {
+    left: -25px;
+  }
+
+  .github-panel__header {
+    align-items: center;
   }
 
   .recent-card__topline {
