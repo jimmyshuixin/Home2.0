@@ -522,7 +522,6 @@ const musicDockEvents = {
               <p>{{ item.subtitle }}</p>
               <div class="education-timeline__facts">
                 <span v-for="fact in item.facts" :key="fact">{{ fact }}</span>
-                <span>{{ item.status }}</span>
               </div>
             </li>
           </ol>
@@ -644,13 +643,6 @@ const musicDockEvents = {
               <p>{{ message.message }}</p>
             </div>
           </aside>
-
-          <aside class="ai-card">
-            <MessageCircle :size="26" />
-            <strong>AI 助手</strong>
-            <p>暂时安静地放在侧边，需要时再叫它出来。</p>
-            <a href="/deepseek.html">去和我聊聊 <ArrowRight :size="16" /></a>
-          </aside>
         </div>
       </section>
     </main>
@@ -666,6 +658,14 @@ const musicDockEvents = {
         </button>
       </nav>
       <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">{{ siteConfig.icpNumber }}</a>
+      <a
+        class="site-footer__wish"
+        href="https://www.bilibili.com/video/BV1aM4y1R77W/"
+        target="_blank"
+        rel="noreferrer"
+      >
+        May you, the beauty of this world, always shine.
+      </a>
     </footer>
 
     <MusicDock

@@ -2403,6 +2403,25 @@ html.dark-mode .recent-card--game {
   color: var(--muted);
 }
 
+.site-footer__wish {
+  grid-column: 1 / -1;
+  justify-self: center;
+  max-width: 100%;
+  color: var(--muted);
+  font-family: var(--font-serif);
+  font-size: 0.95rem;
+  font-style: italic;
+  line-height: 1.5;
+  text-align: center;
+  overflow-wrap: anywhere;
+  transition: color 0.2s ease;
+}
+
+.site-footer__wish:hover,
+.site-footer__wish:focus-visible {
+  color: var(--ink);
+}
+
 .music-dock {
   position: fixed;
   right: max(20px, calc((100vw - 1180px) / 2));
@@ -2935,6 +2954,12 @@ html.dark-mode .recent-card--game {
 
 .hero-sheet-cover {
   width: 84px;
+  height: 84px;
+  min-width: 84px;
+  min-height: 84px;
+  display: block;
+  align-self: start;
+  justify-self: start;
   aspect-ratio: 1;
   object-fit: cover;
   border-radius: 14px;
@@ -4043,7 +4068,15 @@ html.dark-mode .recent-card--game {
   .site-footer {
     width: var(--content);
     grid-template-columns: 1fr;
-    padding-bottom: 122px;
+    justify-items: center;
+    text-align: center;
+    gap: 18px;
+    padding: 32px 0 calc(156px + env(safe-area-inset-bottom));
+  }
+
+  .site-footer nav {
+    gap: 10px 16px;
+    justify-content: center;
   }
 
   .music-dock--mobile.mobile-only {
@@ -4191,6 +4224,28 @@ html.dark-mode .recent-card--game {
 
   .github-panel__header {
     align-items: center;
+  }
+
+  .site-footer {
+    padding-top: 30px;
+    padding-bottom: calc(170px + env(safe-area-inset-bottom));
+    gap: 16px;
+  }
+
+  .site-footer div,
+  .site-footer nav,
+  .site-footer > a {
+    width: 100%;
+  }
+
+  .site-footer strong {
+    margin-bottom: 6px;
+  }
+
+  .site-footer span,
+  .site-footer > a {
+    line-height: 1.6;
+    overflow-wrap: anywhere;
   }
 
   .recent-card__topline {
