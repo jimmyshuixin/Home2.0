@@ -10,7 +10,9 @@
     "dev:music": "wrangler dev --config wrangler.music.jsonc",
     "deploy:music": "wrangler deploy --config wrangler.music.jsonc",
     "check:music": "wrangler deploy --config wrangler.music.jsonc --dry-run",
-    "smoke:music": "node scripts/check-music-worker.mjs"
+    "smoke:music": "node scripts/check-music-worker.mjs",
+    "test:music-session": "node scripts/check-music-session-store.mjs",
+    "test:music": "npm --prefix Meting run test:unit && npm run test:music-session"
   },
   "dependencies": {
     "@meting/core": "^1.6.1",

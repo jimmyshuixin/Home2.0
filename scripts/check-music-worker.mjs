@@ -39,7 +39,23 @@ function assert(condition, message) {
 const health = await call('/health');
 assert(health.status === 200, `Expected /health to return 200, got ${health.status}`);
 assert(health.body?.ok === true, 'Expected /health response to include ok=true');
+assert(health.body?.service === 'music-proxy', 'Expected /health to identify the music-proxy Worker');
 assert(Array.isArray(health.body?.supportedServers), 'Expected /health to list supported servers');
+assert(health.body?.login?.server === 'tencent', 'Expected QR login to be restricted to QQ Music');
+
+const root = await call('/');
+assert(root.status === 302, `Expected the bare domain to redirect to /login, got ${root.status}`);
+
+const loginPage = await call('/login');
+assert(loginPage.status === 200, `Expected /login to return 200, got ${loginPage.status}`);
+assert(String(loginPage.body).includes('QQ Music Worker Login'), 'Expected /login to render the Worker login page');
+
+const protectedQr = await worker.fetch(
+  new Request('https://music.local/login/qr?server=tencent'),
+  { ...env, MUSIC_ADMIN_TOKEN: 'test-admin-token' },
+  ctx,
+);
+assert(protectedQr.status === 403, `Expected protected QR login to return 403, got ${protectedQr.status}`);
 
 const cover = await call('/?server=tencent&type=pic&id=000MkMni19ClKG');
 assert(cover.status === 200, `Expected cover smoke test to return 200, got ${cover.status}`);
@@ -57,11 +73,18 @@ assert(playlist.body.length === 1, `Expected limit=1 playlist smoke test to retu
 
 const resolverUrl = new URL(playlist.body[0].url);
 const anonymousResolver = await call(`${resolverUrl.pathname}${resolverUrl.search}`);
-assert(anonymousResolver.status === 401, `Expected anonymous audio resolution to return 401, got ${anonymousResolver.status}`);
 assert(
-  !String(anonymousResolver.body?.error || '').includes('injahow.cn'),
-  'Expected anonymous audio resolution errors to come from this Worker',
+  anonymousResolver.status === 200 || anonymousResolver.status === 401,
+  `Expected anonymous audio resolution to succeed or require login, got ${anonymousResolver.status}`,
 );
+if (anonymousResolver.status === 200) {
+  assert(anonymousResolver.body?.url?.startsWith('https://'), 'Expected anonymous audio resolution to return a URL');
+} else {
+  assert(
+    !String(anonymousResolver.body?.error || '').includes('injahow.cn'),
+    'Expected anonymous audio resolution errors to come from this Worker',
+  );
+}
 
 const fullPlaylist = await call('/?server=tencent&type=playlist&id=9206816111&limit=all');
 assert(fullPlaylist.status === 200, `Expected full playlist smoke test to return 200, got ${fullPlaylist.status}`);
@@ -88,6 +111,9 @@ console.log(
       ok: true,
       checks: {
         health: health.status,
+        rootRedirect: root.status,
+        loginPage: loginPage.status,
+        protectedQr: protectedQr.status,
         cover: cover.status,
         playlist: playlist.status,
         anonymousResolver: anonymousResolver.status,

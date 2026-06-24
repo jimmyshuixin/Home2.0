@@ -1,15 +1,33 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "home-music-api",
+  "name": "music-proxy",
   "main": "worker/music-proxy.js",
-  "compatibility_date": "2026-06-01",
+  "compatibility_date": "2026-06-11",
   "compatibility_flags": ["nodejs_compat"],
+  "placement": {
+    "mode": "targeted",
+    "region": "aws:ap-east-1"
+  },
+  "routes": [
+    { "pattern": "music.xvyin.com", "custom_domain": true }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MUSIC_SESSION_STORE",
+        "class_name": "MusicSessionStore"
+      }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MusicSessionStore"] }
+  ],
   "vars": {
-    "ALLOWED_ORIGINS": "*",
+    "ALLOWED_ORIGINS": "https://xvyin.com,http://localhost:5173",
     "METING_DEFAULT_SERVER": "tencent",
     "METING_DEFAULT_TYPE": "playlist",
     "METING_DEFAULT_ID": "9206816111",
@@ -20,6 +38,6 @@
     "METING_CONCURRENCY": "3",
     "METING_MEDIA_MODE": "deferred",
     "METING_CACHE_TTL": "1800",
-    "METING_SESSION_TTL": "604800"
+    "METING_SESSION_TTL": "2592000"
   }
 }

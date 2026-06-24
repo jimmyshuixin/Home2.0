@@ -1,4 +1,6 @@
 import Meting from '../Meting/src/meting.js';
+import { createMusicLoginPage } from './music-login-page.js';
+export { MusicSessionStore } from './music-session-store.js';
 
 const DEFAULT_SERVER = 'tencent';
 const DEFAULT_TYPE = 'playlist';
@@ -7,13 +9,15 @@ const DEFAULT_LIMIT = 'all';
 const HARD_MAX_LIMIT = 500;
 const DEFAULT_QUERY_LIMIT = 50;
 const DEFAULT_CACHE_TTL = 60 * 20;
-const DEFAULT_SESSION_TTL = 60 * 60 * 24 * 7;
+const DEFAULT_SESSION_TTL = 60 * 60 * 24 * 30;
 const DEFAULT_BITRATE = 320;
 const DEFAULT_COVER_SIZE = 300;
 const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_MEDIA_MODE = 'deferred';
 const TOKEN_PREFIX_V1 = 'meting-session.v1.';
 const TOKEN_PREFIX_V2 = 'meting-session.v2.';
+const LOGIN_SERVER = 'tencent';
+const SESSION_STORE_NAME = 'qq-music-account';
 const DEFERRED_MEDIA_SERVERS = new Set(['tencent']);
 
 const SUPPORTED_SERVERS = new Set(Meting.getSupportedPlatforms());
@@ -37,17 +41,25 @@ const METING_VERSION = new Meting(DEFAULT_SERVER).VERSION || 'unknown';
 export default {
   async fetch(request, env, ctx) {
     const cors = createCorsHeaders(request, env);
+    const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: cors });
     }
 
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
+    const isLogout = request.method === 'POST' && url.pathname === '/session/logout';
+    if (request.method !== 'GET' && request.method !== 'HEAD' && !isLogout) {
       return jsonResponse({ error: 'Method not allowed' }, 405, cors);
     }
 
     try {
-      const url = new URL(request.url);
+      if (url.pathname === '/' && !url.search) {
+        return Response.redirect(`${url.origin}/login`, 302);
+      }
+
+      if (url.pathname === '/login') {
+        return htmlResponse(createMusicLoginPage(), 200, cors);
+      }
 
       if (url.pathname === '/health') {
         return maybeHead(
@@ -55,13 +67,16 @@ export default {
           jsonResponse(
             {
               ok: true,
-              service: env.WORKER_SERVICE_NAME || 'home-music-api',
+              service: env.WORKER_SERVICE_NAME || 'music-proxy',
               metingVersion: METING_VERSION,
               supportedServers: [...SUPPORTED_SERVERS],
               defaultServer: env.METING_DEFAULT_SERVER || DEFAULT_SERVER,
               defaultType: env.METING_DEFAULT_TYPE || DEFAULT_TYPE,
               login: {
                 qr: true,
+                server: LOGIN_SERVER,
+                persistent: hasPersistentSessionStore(env),
+                adminProtected: Boolean(env.MUSIC_ADMIN_TOKEN),
                 sessionSecret: Boolean(getSessionSecret(env, false)),
               },
             },
@@ -82,6 +97,14 @@ export default {
 
       if (url.pathname === '/session/status') {
         return maybeHead(request, await handleSessionStatus(request, env, cors));
+      }
+
+      if (url.pathname === '/session/logout') {
+        return await handleSessionLogout(request, env, cors);
+      }
+
+      if (url.pathname === '/debug/url') {
+        return maybeHead(request, await handleDebugUrl(request, env, cors));
       }
 
       if (url.pathname === '/me/playlists' || url.pathname === '/user/playlists') {
@@ -117,8 +140,9 @@ export default {
 };
 
 async function handleLoginQr(request, env, cors) {
+  assertMusicAdmin(request, env);
   const url = new URL(request.url);
-  const server = readServer(url.searchParams.get('server') || url.searchParams.get('platform'), env);
+  const server = readLoginServer(url.searchParams.get('server') || url.searchParams.get('platform'));
   const meting = createMeting(server, env);
   const result = parseMetingJson(await meting.loginQr({ server, includeQrImage: true }), {});
 
@@ -126,8 +150,9 @@ async function handleLoginQr(request, env, cors) {
 }
 
 async function handleLoginQrCheck(request, env, cors) {
+  assertMusicAdmin(request, env);
   const url = new URL(request.url);
-  const server = readServer(url.searchParams.get('server') || url.searchParams.get('platform'), env);
+  const server = readLoginServer(url.searchParams.get('server') || url.searchParams.get('platform'));
   const state = String(url.searchParams.get('state') || '').trim();
   const key = String(url.searchParams.get('key') || '').trim();
 
@@ -140,19 +165,38 @@ async function handleLoginQrCheck(request, env, cors) {
   const cookie = result.cookieHeader || result.cookie || '';
 
   if (Number(result.code) === 803 && cookie) {
-    const sessionTtl = clampNumber(env.METING_SESSION_TTL, 300, 60 * 60 * 24 * 30, DEFAULT_SESSION_TTL);
+    const sessionTtl = clampNumber(env.METING_SESSION_TTL, 300, 60 * 60 * 24 * 180, DEFAULT_SESSION_TTL);
     const expiresAt = Date.now() + sessionTtl * 1000;
+    const credential = inspectTencentCredential(cookie);
 
-    result.session = await createSessionToken(
-      {
-        server: result.server || result.platform || server,
-        cookie,
-        expiresAt,
-      },
-      env,
-    );
+    const sessionPayload = {
+      server: result.server || result.platform || server,
+      cookie,
+      expiresAt,
+    };
+
+    if (hasPersistentSessionStore(env)) {
+      await writePersistentSession(
+        {
+          ...sessionPayload,
+          id: crypto.randomUUID(),
+          createdAt: Date.now(),
+        },
+        env,
+      );
+    } else {
+      result.session = await createSessionToken(sessionPayload, env);
+    }
     result.expiresAt = new Date(expiresAt).toISOString();
-    result.cookieStored = true;
+    result.cookieStored = hasPersistentSessionStore(env);
+    result.persistent = hasPersistentSessionStore(env);
+    result.credential = credential;
+
+    if (!credential.musicKey) {
+      result.message = 'QQ login saved. Playback will use the authenticated web-cookie fallback.';
+    }
+  } else if (Number(result.code) === 803) {
+    result.message = 'QQ login succeeded, but QQ Music did not return a reusable session cookie.';
   }
 
   return jsonResponse(sanitizeLoginResult(result), 200, cors, { 'Cache-Control': 'no-store' });
@@ -160,18 +204,74 @@ async function handleLoginQrCheck(request, env, cors) {
 
 async function handleSessionStatus(request, env, cors) {
   const url = new URL(request.url);
-  const server = readServer(url.searchParams.get('server') || url.searchParams.get('platform'), env);
+  const server = readLoginServer(url.searchParams.get('server') || url.searchParams.get('platform'));
   const token = readSessionTokenFromRequest(request);
-  const session = await readSession(token, env);
+  const session = token ? await readSession(token, env) : await readPersistentSession('', env);
   const ok = Boolean(session?.cookie && (!server || session.server === server));
+  const credential = inspectTencentCredential(session?.cookie || '');
 
   return jsonResponse(
     {
       ok,
       server: session?.server || server,
       expiresAt: session?.expiresAt ? new Date(session.expiresAt).toISOString() : '',
+      authenticated: Boolean(ok && credential.uin && credential.musicKey),
+      persistent: hasPersistentSessionStore(env),
     },
     ok ? 200 : 401,
+    cors,
+    { 'Cache-Control': 'no-store' },
+  );
+}
+
+async function handleSessionLogout(request, env, cors) {
+  const token = readSessionTokenFromRequest(request);
+  if (!token) {
+    assertMusicAdmin(request, env);
+    await deletePersistentSession('', env);
+    return jsonResponse({ ok: true }, 200, cors, { 'Cache-Control': 'no-store' });
+  }
+
+  const session = await readSession(token, env);
+  if (session?.id && hasPersistentSessionStore(env)) {
+    await deletePersistentSession(session.id, env);
+  }
+
+  return jsonResponse({ ok: true }, 200, cors, { 'Cache-Control': 'no-store' });
+}
+
+async function handleDebugUrl(request, env, cors) {
+  assertMusicAdmin(request, env);
+  const url = new URL(request.url);
+  const server = readLoginServer(url.searchParams.get('server') || url.searchParams.get('platform'));
+  const id = String(url.searchParams.get('id') || '').trim();
+  const bitrate = clampNumber(url.searchParams.get('br'), 96, 9999, 320);
+  if (!id) throw httpError(400, 'Missing song id');
+
+  const sessionCookie = await readSessionCookie('', server, env, { allowPersistent: true });
+  const meting = createMeting(server, env, sessionCookie);
+  const result = parseMetingJson(await meting.url(id, bitrate), {});
+  const [egress, directStream] = await Promise.all([
+    probeWorkerEgress(),
+    probeTencentLegacyStream(id, sessionCookie),
+  ]);
+  return jsonResponse(
+    {
+      ok: Boolean(result.url),
+      url: result.url || '',
+      br: result.br ?? -1,
+      code: result.code ?? null,
+      strategy: result.strategy || '',
+      diagnostics: Array.isArray(result.diagnostics) ? result.diagnostics : [],
+      credential: inspectTencentCredential(sessionCookie),
+      execution: {
+        colo: request.cf?.colo || '',
+        country: request.cf?.country || '',
+        egress,
+      },
+      directStream,
+    },
+    200,
     cors,
     { 'Cache-Control': 'no-store' },
   );
@@ -199,8 +299,8 @@ function createCorsHeaders(request, env) {
 
   return {
     'Access-Control-Allow-Origin': allowOrigin,
-    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Music-Admin-Token',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
   };
@@ -254,8 +354,28 @@ function readServer(value, env) {
   return server;
 }
 
+function readLoginServer(value) {
+  const server = cleanToken(value || LOGIN_SERVER);
+  if (server !== LOGIN_SERVER) {
+    throw httpError(400, 'Only QQ Music login is supported');
+  }
+  return LOGIN_SERVER;
+}
+
+function assertMusicAdmin(request, env) {
+  const expected = String(env.MUSIC_ADMIN_TOKEN || '');
+  if (!expected) return;
+
+  const actual = request.headers.get('X-Music-Admin-Token') || '';
+  if (!timingSafeEqual(actual, expected)) {
+    throw httpError(403, 'Music admin token is required');
+  }
+}
+
 async function resolveMusic(params, env) {
-  const sessionCookie = await readSessionCookie(params.sessionToken, params.server, env);
+  const sessionCookie = await readSessionCookie(params.sessionToken, params.server, env, {
+    allowPersistent: params.server === LOGIN_SERVER && params.type === 'url',
+  });
   const meting = createMeting(params.server, env, sessionCookie);
 
   if (params.type === 'user_playlists' || params.type === 'user-playlists' || params.type === 'playlists') {
@@ -268,12 +388,35 @@ async function resolveMusic(params, env) {
   if (params.type === 'url') {
     const result = parseMetingJson(await meting.url(params.id, params.bitrate), {});
     if (!result.url) {
-      throw httpError(
-        sessionCookie ? 502 : 401,
-        result.message || 'QQ Music login is required to resolve this track',
+      const regionRestricted = hasTencentResultCode(result, 104003);
+      console.warn(
+        JSON.stringify({
+          event: 'tencent_url_resolution_failed',
+          songId: params.id,
+          code: result.code ?? null,
+          regionRestricted,
+          message: result.message || '',
+          authenticated: Boolean(sessionCookie),
+          credential: inspectTencentCredential(sessionCookie),
+        }),
       );
+      if (sessionCookie) {
+        return {
+          ok: false,
+          url: '',
+          playable: false,
+          code: regionRestricted ? 'QQ_REGION_RESTRICTED' : 'QQ_URL_UNAVAILABLE',
+          message: regionRestricted
+            ? 'QQ Music blocked this media request outside mainland China.'
+            : result.message || 'QQ Music did not return a playable URL.',
+        };
+      }
+      throw httpError(401, result.message || 'QQ Music login is required to resolve this track');
     }
-    return result;
+    return {
+      ...result,
+      url: String(result.url).replace(/^http:/i, 'https:'),
+    };
   }
 
   if (params.type === 'pic') {
@@ -478,10 +621,12 @@ function createMeting(server, env, sessionCookie = '') {
   return meting;
 }
 
-async function readSessionCookie(token, expectedServer, env) {
-  if (!token) return '';
-
-  const session = await readSession(token, env);
+async function readSessionCookie(token, expectedServer, env, option = {}) {
+  const session = token
+    ? await readSession(token, env)
+    : option.allowPersistent
+      ? await readPersistentSession('', env)
+      : null;
   if (!session?.cookie) return '';
 
   if (expectedServer && session.server !== expectedServer) {
@@ -514,6 +659,162 @@ async function readSession(token, env) {
   }
 
   return null;
+}
+
+function hasPersistentSessionStore(env) {
+  return Boolean(env.MUSIC_SESSION_STORE);
+}
+
+function getPersistentSessionStub(env) {
+  const namespace = env.MUSIC_SESSION_STORE;
+  if (!namespace) return null;
+
+  if (typeof namespace.getByName === 'function') {
+    return namespace.getByName(SESSION_STORE_NAME);
+  }
+
+  return namespace.get(namespace.idFromName(SESSION_STORE_NAME));
+}
+
+async function writePersistentSession(session, env) {
+  const stub = getPersistentSessionStub(env);
+  if (!stub) return false;
+
+  const response = await stub.fetch('https://music-session.internal/session', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(session),
+  });
+
+  if (!response.ok) {
+    throw httpError(500, 'Could not persist the QQ Music session');
+  }
+  return true;
+}
+
+async function readPersistentSession(sessionId, env) {
+  const stub = getPersistentSessionStub(env);
+  if (!stub) return null;
+
+  const url = new URL('https://music-session.internal/session');
+  if (sessionId) url.searchParams.set('id', sessionId);
+  const response = await stub.fetch(url.toString());
+  if (response.status === 404) return null;
+  if (!response.ok) throw httpError(500, 'Could not read the QQ Music session');
+
+  const body = await response.json();
+  return body.session || null;
+}
+
+async function deletePersistentSession(sessionId, env) {
+  const stub = getPersistentSessionStub(env);
+  if (!stub) return false;
+
+  const url = new URL('https://music-session.internal/session');
+  if (sessionId) url.searchParams.set('id', sessionId);
+  const response = await stub.fetch(url.toString(), { method: 'DELETE' });
+  return response.ok;
+}
+
+function inspectTencentCredential(cookie) {
+  const names = new Set(
+    String(cookie || '')
+      .split(';')
+      .map((item) => item.trim().split('=', 1)[0])
+      .filter(Boolean),
+  );
+  const nativeMusicKeyNames = ['qqmusic_key', 'qm_keyst', 'musickey', 'music_key', 'psrf_musickey'];
+  const fallbackMusicKeyNames = ['p_skey', 'skey'];
+
+  return {
+    uin: ['qqmusic_uin', 'musicid', 'uin', 'ptui_loginuin', 'luin', 'superuin', 'p_uin', 'pt2gguin'].some(
+      (name) => names.has(name),
+    ),
+    musicKey: [...nativeMusicKeyNames, ...fallbackMusicKeyNames].some((name) => names.has(name)),
+    nativeMusicKey: nativeMusicKeyNames.some((name) => names.has(name)),
+    fallbackMusicKey: fallbackMusicKeyNames.some((name) => names.has(name)),
+    skey: names.has('p_skey') || names.has('skey'),
+    cookieNames: [...names].sort(),
+  };
+}
+
+function hasTencentResultCode(result, expectedCode) {
+  return (Array.isArray(result?.diagnostics) ? result.diagnostics : []).some((diagnostic) =>
+    (Array.isArray(diagnostic?.items) ? diagnostic.items : []).some(
+      (item) => Number(item?.result) === Number(expectedCode),
+    ),
+  );
+}
+
+async function probeWorkerEgress() {
+  try {
+    const response = await fetch('https://www.cloudflare.com/cdn-cgi/trace', {
+      headers: { Accept: 'text/plain' },
+    });
+    if (!response.ok) return { status: response.status };
+
+    const values = Object.fromEntries(
+      (await response.text())
+        .split('\n')
+        .map((line) => line.trim().split('=', 2))
+        .filter(([key, value]) => key && value),
+    );
+    return {
+      status: response.status,
+      ip: values.ip || '',
+      colo: values.colo || '',
+      location: values.loc || '',
+    };
+  } catch (error) {
+    return { status: 0, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function probeTencentLegacyStream(id, cookie) {
+  try {
+    const detailUrl = new URL('https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg');
+    detailUrl.search = new URLSearchParams({ songmid: id, platform: 'yqq', format: 'json' }).toString();
+    const detailResponse = await fetch(detailUrl, {
+      headers: {
+        Accept: 'application/json',
+        Cookie: cookie,
+        Referer: 'https://y.qq.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    });
+    const song = await detailResponse.json();
+    const urlMap = song?.data?.[0]?.url || song?.data?.url || song?.url || {};
+    const legacyPath = Object.values(urlMap).find((value) => typeof value === 'string' && value);
+    if (!legacyPath) return { available: false };
+
+    const streamUrl = new URL(/^https?:\/\//i.test(legacyPath) ? legacyPath : `https://${legacyPath}`);
+    if (!streamUrl.hostname.endsWith('.qqmusic.qq.com')) return { available: false };
+
+    const response = await fetch(streamUrl, {
+      redirect: 'manual',
+      headers: {
+        Accept: '*/*',
+        Cookie: cookie,
+        Range: 'bytes=0-0',
+        Referer: 'https://y.qq.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    });
+    await response.body?.cancel();
+
+    return {
+      available: true,
+      host: streamUrl.hostname,
+      status: response.status,
+      clientIp: response.headers.get('Client-Ip') || response.headers.get('X-Client-Ip') || '',
+      location: response.headers.get('Location') || '',
+    };
+  } catch (error) {
+    return {
+      available: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 async function readEncryptedSession(rest, env) {
@@ -618,6 +919,21 @@ function jsonResponse(body, status, cors, headers = {}) {
       ...cors,
       ...headers,
       'Content-Type': 'application/json; charset=utf-8',
+    },
+  });
+}
+
+function htmlResponse(body, status, cors) {
+  return new Response(body, {
+    status,
+    headers: {
+      ...cors,
+      'Cache-Control': 'no-store',
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'",
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
     },
   });
 }
