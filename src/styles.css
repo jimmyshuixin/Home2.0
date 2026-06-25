@@ -1822,21 +1822,30 @@ html.dark-mode .recent-card--game {
 .education-timeline {
   position: relative;
   margin-top: clamp(24px, 3vw, 34px);
-  padding: clamp(20px, 2.5vw, 28px) 0 0;
-  border-top: 1px solid var(--hairline);
-  overflow: visible;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.55fr);
+  gap: clamp(24px, 4vw, 54px);
+  padding: clamp(24px, 3.2vw, 38px);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--green) 10%, transparent), transparent 34%),
+    linear-gradient(315deg, color-mix(in srgb, var(--blue) 10%, transparent), transparent 38%),
+    var(--surface);
+  border: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  border-radius: 8px;
+  box-shadow: 0 18px 54px rgba(33, 28, 22, 0.08);
+  overflow: hidden;
+  isolation: isolate;
 }
 
 .education-timeline__heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 22px;
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-content: center;
+  gap: 12px;
 }
 
 .education-timeline__heading span {
-  order: 2;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.78rem;
@@ -1845,154 +1854,230 @@ html.dark-mode .recent-card--game {
 }
 
 .education-timeline__heading h3 {
-  order: 1;
   margin: 0;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  font-family: var(--font-serif);
+  font-size: clamp(2rem, 3.8vw, 3.4rem);
+  font-weight: 650;
+  line-height: 1.04;
+}
+
+.education-timeline__heading h3 svg {
+  flex: 0 0 auto;
+  color: var(--red);
 }
 
 .education-timeline__track {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: clamp(24px, 4vw, 54px);
+  gap: 14px;
   margin: 0;
-  padding: 22px 0 0;
+  padding: 0 0 0 32px;
+  counter-reset: education-step;
   list-style: none;
 }
 
 .education-timeline__track::before {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 2px;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--red) 78%, transparent),
-      color-mix(in srgb, var(--green) 60%, transparent),
-      color-mix(in srgb, var(--blue) 72%, transparent)
-    );
+  top: 19px;
+  bottom: 19px;
+  left: 6px;
+  width: 2px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--red) 72%, transparent),
+    color-mix(in srgb, var(--green) 64%, transparent),
+    color-mix(in srgb, var(--blue) 62%, transparent)
+  );
   border-radius: 999px;
-  opacity: 0.72;
-}
-
-.education-timeline__track::after {
-  content: "";
-  position: absolute;
-  top: -5px;
-  left: 0;
-  width: 12px;
-  height: 12px;
-  background: var(--surface);
-  border: 2px solid var(--red);
-  border-radius: 50%;
-  box-shadow: 0 0 0 7px color-mix(in srgb, var(--red) 10%, transparent);
-  animation: timeline-sweep 8.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  opacity: 0.58;
 }
 
 .education-timeline__track li {
   position: relative;
+  display: grid;
+  grid-template-columns: minmax(128px, 0.32fr) minmax(0, 1fr);
+  gap: clamp(16px, 3vw, 28px);
+  align-items: center;
   min-width: 0;
-  padding: 8px 0 0;
-  background: transparent;
-  border: 0;
-}
-
-.education-timeline__track li + li {
-  padding-left: clamp(18px, 3vw, 34px);
-  border-left: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  padding: clamp(16px, 2.2vw, 22px);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--surface) 96%, transparent), color-mix(in srgb, var(--surface-2) 72%, transparent));
+  border: 1px solid color-mix(in srgb, var(--ink) 11%, transparent);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(33, 28, 22, 0.06);
+  counter-increment: education-step;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .education-timeline__track li::before {
-  content: "";
+  content: "0" counter(education-step);
   position: absolute;
-  top: -28px;
-  left: 0;
-  width: 12px;
-  height: 12px;
+  top: 50%;
+  left: -32px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
   background: var(--surface);
-  border: 2px solid var(--red);
+  color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 48%, transparent);
   border-radius: 50%;
-  box-shadow: 0 0 0 8px color-mix(in srgb, var(--red) 10%, transparent);
+  box-shadow: 0 0 0 7px color-mix(in srgb, var(--red) 9%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 900;
+  transform: translateY(-50%);
 }
 
-.education-timeline__track li.future::before {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 8px color-mix(in srgb, var(--blue) 10%, transparent);
+.education-timeline__track li:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--red) 24%, var(--hairline));
+  box-shadow: 0 16px 42px rgba(33, 28, 22, 0.1);
 }
 
 .education-timeline__track li.active::before {
+  color: var(--green);
   border-color: var(--green);
-  box-shadow: 0 0 0 8px color-mix(in srgb, var(--green) 14%, transparent);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--green) 15%, transparent);
   animation: timeline-pulse 2.2s ease-in-out infinite;
 }
 
-.education-timeline__track time {
+.education-timeline__track li.active {
+  border-color: color-mix(in srgb, var(--green) 36%, var(--hairline));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--surface) 96%, transparent), color-mix(in srgb, var(--green) 12%, var(--surface-2)));
+}
+
+.education-timeline__date {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-width: 0;
+}
+
+.education-timeline__date span {
+  width: max-content;
+  padding-bottom: 7px;
   color: var(--red);
   font-family: var(--font-mono);
-  font-size: 0.82rem;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1;
+  border-bottom: 2px solid color-mix(in srgb, var(--red) 54%, transparent);
+}
+
+.education-timeline__date time {
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: clamp(1.08rem, 1.55vw, 1.42rem);
+  font-weight: 760;
+  line-height: 1.18;
+}
+
+.education-timeline__body {
+  min-width: 0;
+}
+
+.education-timeline__school {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.education-timeline__school strong {
+  display: block;
+  font-family: var(--font-serif);
+  font-size: clamp(1.3rem, 2vw, 1.85rem);
+  font-weight: 720;
+  line-height: 1.25;
+}
+
+.education-timeline__school > span {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  color: var(--ink-2);
+  font-size: 0.76rem;
   font-weight: 820;
 }
 
-.education-timeline__track strong {
-  display: block;
-  margin-top: 12px;
-  font-family: var(--font-serif);
-  font-size: clamp(1.24rem, 1.75vw, 1.62rem);
-  line-height: 1.25;
+.education-timeline__school > span::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  background: var(--red);
+  border-radius: 50%;
+}
+
+.education-timeline__track li.active .education-timeline__school > span::before {
+  background: var(--green);
 }
 
 .education-timeline__track p {
   margin: 8px 0 0;
   color: var(--ink-2);
+  font-size: 0.96rem;
 }
 
 .education-timeline__facts {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
+  gap: 7px;
+  margin-top: 16px;
 }
 
 .education-timeline__facts span {
-  padding: 5px 9px;
+  padding: 5px 9px 6px;
   color: var(--ink-2);
-  background: color-mix(in srgb, var(--surface-2) 56%, transparent);
-  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
   border-radius: 999px;
   font-size: 0.76rem;
-  font-weight: 760;
+  font-weight: 780;
+  line-height: 1.2;
 }
 
-@keyframes timeline-sweep {
-  0%, 18% {
-    transform: translateX(0);
-  }
+html.dark-mode .education-timeline {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--green) 12%, transparent), transparent 34%),
+    linear-gradient(315deg, color-mix(in srgb, var(--blue) 13%, transparent), transparent 38%),
+    var(--surface);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.24);
+}
 
-  78%, 100% {
-    transform: translateX(calc(var(--content) - 12px));
-  }
+html.dark-mode .education-timeline__track li {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--surface) 94%, transparent), color-mix(in srgb, var(--surface-3) 34%, transparent));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+
+html.dark-mode .education-timeline__track li.active {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--surface) 94%, transparent), color-mix(in srgb, var(--green) 13%, var(--surface-2)));
 }
 
 @keyframes timeline-pulse {
   0%, 100% {
-    transform: scale(1);
+    transform: translateY(-50%) scale(1);
   }
 
   50% {
-    transform: scale(1.16);
+    transform: translateY(-50%) scale(1.13);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .recent-card--photography > img,
   .recent-card--game > img,
-  .education-timeline__track::after,
+  .education-timeline__track li,
   .education-timeline__track li.active::before {
     transition: none;
     animation: none;
@@ -4026,37 +4111,13 @@ html.dark-mode .recent-card--game {
     grid-template-columns: 1fr;
   }
 
-  .education-timeline__track::before {
-    top: 0;
-    bottom: 0;
-    left: 0;
-    right: auto;
-    width: 2px;
-    height: auto;
-  }
-
-  .education-timeline__track::after {
-    display: none;
+  .education-timeline {
+    grid-template-columns: 1fr;
+    gap: 24px;
   }
 
   .education-timeline__heading {
-    margin-left: 24px;
-  }
-
-  .education-timeline__track {
-    grid-template-columns: 1fr;
-    padding-left: 24px;
-    padding-top: 0;
-  }
-
-  .education-timeline__track li + li {
-    padding-left: 0;
-    border-left: 0;
-  }
-
-  .education-timeline__track li::before {
-    top: 24px;
-    left: -31px;
+    max-width: 34rem;
   }
 
   .skill-row,
@@ -4202,24 +4263,41 @@ html.dark-mode .recent-card--game {
 
   .education-timeline {
     padding: 18px;
+    gap: 20px;
   }
 
   .education-timeline__heading {
-    display: grid;
-    justify-content: start;
-    margin-bottom: 24px;
+    gap: 10px;
   }
 
   .education-timeline__track {
-    padding-left: 18px;
+    padding-left: 26px;
   }
 
   .education-timeline__track li {
-    padding: 18px 16px;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 17px 16px;
   }
 
   .education-timeline__track li::before {
-    left: -25px;
+    left: -26px;
+    width: 24px;
+    height: 24px;
+    font-size: 0.62rem;
+  }
+
+  .education-timeline__track::before {
+    left: 5px;
+  }
+
+  .education-timeline__date {
+    gap: 7px;
+  }
+
+  .education-timeline__school {
+    display: grid;
+    gap: 8px;
   }
 
   .github-panel__header {

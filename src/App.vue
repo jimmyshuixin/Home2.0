@@ -67,20 +67,32 @@ const isDesktopViewport = ref(false);
 const heroLyricScroller = ref(null);
 const heroPlayerCompact = ref(false);
 const contactMode = ref('email');
+const currentTime = ref(new Date());
 const gameUid = '188938401';
 const uidCopyStatus = ref('');
 let uidCopyTimer;
 let heroPlayerAnimationTimer;
+let currentTimeTimer;
 
+const parseLocalDate = (value) => {
+  const [year, month = 1, day = 1] = String(value || '').split('-').map(Number);
+  return new Date(year, month - 1, day);
+};
+const toDateUtc = (date) => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+const siteStartDate = computed(() => parseLocalDate(siteConfig.siteStartDate));
+const siteStartYear = computed(() => siteStartDate.value.getFullYear());
+const currentYear = computed(() => currentTime.value.getFullYear());
 const fitnessDayCount = computed(() => {
-  const today = new Date();
+  const today = currentTime.value;
   const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
   const fitnessStartUtc = Date.UTC(2022, 9, 18);
   return Math.max(1, Math.floor((todayUtc - fitnessStartUtc) / 864e5) + 1);
 });
-const siteUptime = computed(() => Math.ceil(Math.abs(new Date() - new Date(siteConfig.siteStartDate)) / 864e5));
+const siteUptime = computed(() =>
+  Math.max(1, Math.floor((toDateUtc(currentTime.value) - toDateUtc(siteStartDate.value)) / 864e5) + 1),
+);
 const currentDate = computed(() =>
-  new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }).format(new Date()),
+  new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }).format(currentTime.value),
 );
 const formatCompactNumber = (value) => {
   if (github.isLoading && !github.updatedAt) return '...';
@@ -123,8 +135,7 @@ const parseEducationDate = (duration, useEnd = false) => {
 const educationTimeline = computed(() => resumeData.education.map((item) => {
   const now = new Date();
   const start = parseEducationDate(item.duration);
-  const end = parseEducationDate(item.duration, true);
-  const status = start && now < start ? '即将开始' : end && now > end ? '已完成' : '进行中';
+  const status = start && now < start ? '进行中' : '毕业';
   return {
     ...item,
     status,
@@ -156,6 +167,10 @@ const syncDesktopViewport = () => {
 };
 
 onMounted(() => {
+  currentTime.value = new Date();
+  currentTimeTimer = window.setInterval(() => {
+    currentTime.value = new Date();
+  }, 60000);
   desktopMediaQuery = window.matchMedia('(min-width: 861px)');
   syncDesktopViewport();
   desktopMediaQuery.addEventListener('change', syncDesktopViewport);
@@ -167,6 +182,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleEscape);
   window.clearTimeout(uidCopyTimer);
   window.clearTimeout(heroPlayerAnimationTimer);
+  window.clearInterval(currentTimeTimer);
   document.body.style.overflow = '';
 });
 
@@ -513,15 +529,23 @@ const musicDockEvents = {
         <div class="education-timeline" aria-label="求学历程时间线">
           <div class="education-timeline__heading">
             <span>EDUCATION PATH</span>
-            <h3><GraduationCap :size="20" /> 求学历程</h3>
+            <h3><GraduationCap :size="22" aria-hidden="true" /> 求学历程</h3>
           </div>
           <ol class="education-timeline__track">
-            <li v-for="item in educationTimeline" :key="`${item.stage}-${item.institution}`" :class="{ active: item.status === '进行中', future: item.status === '即将开始' }">
-              <time>{{ item.duration }}</time>
-              <strong>{{ item.stage }} · {{ item.institution }}</strong>
-              <p>{{ item.subtitle }}</p>
-              <div class="education-timeline__facts">
-                <span v-for="fact in item.facts" :key="fact">{{ fact }}</span>
+            <li v-for="item in educationTimeline" :key="`${item.stage}-${item.institution}`" :class="{ active: item.status === '进行中' }">
+              <div class="education-timeline__date">
+                <span>{{ item.stage }}</span>
+                <time>{{ item.duration }}</time>
+              </div>
+              <div class="education-timeline__body">
+                <div class="education-timeline__school">
+                  <strong>{{ item.institution }}</strong>
+                  <span>{{ item.status }}</span>
+                </div>
+                <p>{{ item.subtitle }}</p>
+                <div class="education-timeline__facts">
+                  <span v-for="fact in item.facts" :key="fact">{{ fact }}</span>
+                </div>
               </div>
             </li>
           </ol>
@@ -650,7 +674,7 @@ const musicDockEvents = {
     <footer class="site-footer">
       <div>
         <strong>虚宁</strong>
-        <span>© 2022-{{ new Date().getFullYear() }} · 已运行 {{ siteUptime }} 天</span>
+        <span>© {{ siteStartYear }}-{{ currentYear }} · 已运行 {{ siteUptime }} 天</span>
       </div>
       <nav aria-label="页脚导航">
         <button v-for="item in navItems" :key="item.id" type="button" @click="scrollTo(item.id)">
