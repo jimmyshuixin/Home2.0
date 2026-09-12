@@ -13,6 +13,13 @@ const config: FirebasePasswordConfig = {
   passwordResetUrl: 'https://site.example.test/admin/reset-password',
 };
 const password = 'fictional current password for tests';
+it('does not follow redirects carrying administrator credentials', async () => {
+  const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 307, headers: { Location: 'https://untrusted.invalid/login' } }));
+  const provider = new FirebasePasswordProvider(config, { fetch: transport, getGoogleAccessToken: async () => 'unused' });
+  await expect(provider.signIn({ username: config.adminUsername, password })).rejects.toMatchObject({ code: 'AUTH_UNAVAILABLE' });
+  expect(transport).toHaveBeenCalledTimes(1);
+  expect(transport.mock.calls[0]?.[1]?.redirect).toBe('manual');
+});
 const newPassword = 'fictional replacement passphrase';
 let keys: Awaited<ReturnType<typeof generateKeyPair>>;
 let wrongKeys: Awaited<ReturnType<typeof generateKeyPair>>;

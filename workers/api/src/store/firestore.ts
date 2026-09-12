@@ -63,9 +63,10 @@ export class FirestoreStore implements Store {
       stage = 'fetch';
       const response = await this.#fetch(`${FIRESTORE_ORIGIN}/v1/${this.#documents}:${operation}`, {
         method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: serialized, signal: controller.signal, redirect: 'error', cache: 'no-store',
+        body: serialized, signal: controller.signal, redirect: 'manual', cache: 'no-store',
       });
       status = response.status;
+      if (status >= 300 && status < 400) { await response.body?.cancel(); throw new StoreError('STORE_UNAVAILABLE'); }
       stage = 'response_body';
       const result = await readBoundedJson(response, maxBytes);
       stage = 'response_status';

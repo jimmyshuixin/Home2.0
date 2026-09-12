@@ -98,9 +98,11 @@ export function createGoogleAccessTokenProvider(config: GoogleServiceAccountConf
       stage = 'token_fetch';
       const response = await fetcher(TOKEN_URL, {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-        body: body.toString(), redirect: 'error', cache: 'no-store', signal: controller.signal,
+        // workerd rejects redirect:'error'; manual plus an explicit 3xx rejection never forwards credentials.
+        body: body.toString(), redirect: 'manual', cache: 'no-store', signal: controller.signal,
       });
       status = response.status;
+      if (status >= 300 && status < 400) { await response.body?.cancel(); throw new StoreError('STORE_UNAVAILABLE'); }
       stage = 'token_response';
       const result = await readBoundedJson(response, 64 * 1024);
       stage = 'token_validation';

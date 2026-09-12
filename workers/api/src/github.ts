@@ -3,7 +3,7 @@ import { assert, ApiError } from './errors';
 import type { ReleaseJob } from './releases';
 export async function dispatchGitHubMedia(assetId: string, config: { token: string; repository: string; ref: string; origin: string }): Promise<void> {
   assert(config.token && /^[\w.-]+\/[\w.-]+$/u.test(config.repository) && /^[A-Za-z0-9_-]+$/u.test(assetId), 'MEDIA_NOT_CONFIGURED', 503, '自动媒体处理尚未配置');
-  const response = await fetch(`https://api.github.com/repos/${config.repository}/actions/workflows/v3-media.yml/dispatches`, { method: 'POST', headers: { authorization: `Bearer ${config.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'xvyin-v3', 'x-github-api-version': '2022-11-28' }, body: JSON.stringify({ ref: config.ref.replace(/^refs\/heads\//u, ''), inputs: { asset_id: assetId, api_origin: config.origin } }), signal: AbortSignal.timeout(15000), redirect: 'error' });
+  const response = await fetch(`https://api.github.com/repos/${config.repository}/actions/workflows/v3-media.yml/dispatches`, { method: 'POST', headers: { authorization: `Bearer ${config.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'xvyin-v3', 'x-github-api-version': '2022-11-28' }, body: JSON.stringify({ ref: config.ref.replace(/^refs\/heads\//u, ''), inputs: { asset_id: assetId, api_origin: config.origin } }), signal: AbortSignal.timeout(15000), redirect: 'manual' });
   await response.body?.cancel();
   assert(response.status === 204, 'MEDIA_DISPATCH_FAILED', 503, '媒体已上传，自动处理派发未确认，可在后台重试处理');
 }
@@ -22,7 +22,7 @@ export async function verifyGitHubRunner(request: Request, config: { repository:
 }
 export async function dispatchGitHubBuild(job: ReleaseJob, config: { token: string; repository: string; ref: string; origin: string }): Promise<void> {
   assert(config.token && /^[\w.-]+\/[\w.-]+$/u.test(config.repository), 'BUILD_NOT_CONFIGURED', 503, '自动构建尚未配置，可使用已认证的本地发布命令');
-  const response = await fetch(`https://api.github.com/repos/${config.repository}/actions/workflows/v3-content.yml/dispatches`, { method: 'POST', headers: { authorization: `Bearer ${config.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'xvyin-v3', 'x-github-api-version': '2022-11-28' }, body: JSON.stringify({ ref: config.ref.replace(/^refs\/heads\//u, ''), inputs: { job_id: job.id, api_origin: config.origin, code_sha: job.codeSha } }), signal: AbortSignal.timeout(15000), redirect: 'error' });
+  const response = await fetch(`https://api.github.com/repos/${config.repository}/actions/workflows/v3-content.yml/dispatches`, { method: 'POST', headers: { authorization: `Bearer ${config.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'xvyin-v3', 'x-github-api-version': '2022-11-28' }, body: JSON.stringify({ ref: config.ref.replace(/^refs\/heads\//u, ''), inputs: { job_id: job.id, api_origin: config.origin, code_sha: job.codeSha } }), signal: AbortSignal.timeout(15000), redirect: 'manual' });
   await response.body?.cancel();
   assert(response.status === 204, 'BUILD_DISPATCH_FAILED', 503, '自动构建派发未确认，任务仍在队列中，可重试或使用本地执行器');
 }

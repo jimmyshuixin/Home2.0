@@ -100,10 +100,11 @@ export class FirebasePasswordProvider implements AuthProvider {
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
-        redirect: 'error',
+        redirect: 'manual',
         cache: 'no-store',
         signal: controller.signal,
       });
+      if (response.status >= 300 && response.status < 400) { await response.body?.cancel(); throw new AuthError('AUTH_UNAVAILABLE'); }
       if (!response.body) throw new AuthError('AUTH_UNAVAILABLE');
       const declaredLength = response.headers.get('content-length');
       if (declaredLength && Number(declaredLength) > RESPONSE_LIMIT) {

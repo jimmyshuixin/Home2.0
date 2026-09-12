@@ -18,7 +18,8 @@ export function createMusicHandler(origin: string, fetcher: typeof fetch = globa
   assert(origin === 'https://music.xvyin.com', 'MUSIC_NOT_CONFIGURED', 503, '音乐来源未配置');
   async function upstream(server: string, type: string, id: string): Promise<unknown> {
     const url = new URL(origin); url.search = new URLSearchParams({ server, type, id: musicId.parse(id), limit: 'all' }).toString();
-    const response = await fetcher(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15000), redirect: 'error' });
+    const response = await fetcher(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15000), redirect: 'manual' });
+    if (!response.ok) await response.body?.cancel();
     assert(response.ok, 'MUSIC_UNAVAILABLE', 503, '音乐平台暂时不可用，可选择站内歌单');
     return readBoundedJson(response, 2 * 1024 * 1024);
   }

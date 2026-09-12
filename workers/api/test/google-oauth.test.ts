@@ -14,6 +14,12 @@ beforeEach(() => { vi.spyOn(console, 'error').mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('request-scoped service-account OAuth', () => {
+  it('rejects redirects without a second request or accepting a token-shaped redirect body', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ access_token: 'redirect-token', token_type: 'Bearer', expires_in: 3600 }, { status: 307, headers: { Location: 'https://untrusted.invalid/token' } }));
+    await expect(createGoogleAccessTokenProvider(config, { fetch: fetcher })()).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[1]?.redirect).toBe('manual');
+  });
   it('classifies pre-network key import failures without logging key, message or stack', async () => {
     vi.spyOn(crypto.subtle, 'importKey').mockRejectedValueOnce(new DOMException('private-key-and-provider-detail', 'DataError'));
     const fetcher = vi.fn<typeof fetch>();
@@ -52,7 +58,7 @@ describe('request-scoped service-account OAuth', () => {
     let assertion = '';
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
       expect(String(url)).toBe('https://oauth2.googleapis.com/token');
-      expect(init?.redirect).toBe('error');
+      expect(init?.redirect).toBe('manual');
       expect(init?.cache).toBe('no-store');
       const params = new URLSearchParams(String(init?.body));
       expect(params.get('grant_type')).toBe('urn:ietf:params:oauth:grant-type:jwt-bearer');

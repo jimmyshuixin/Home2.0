@@ -15,6 +15,12 @@ beforeEach(() => { vi.spyOn(console, 'error').mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('Firestore REST protocol without remote access', () => {
+  it('rejects redirected document requests without forwarding the bearer token', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 307, headers: { Location: 'https://untrusted.invalid/documents' } }));
+    await expect(new FirestoreStore(config, { getAccessToken: access, fetch: fetcher }).get('entries/test')).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[1]?.redirect).toBe('manual');
+  });
   it('logs fixed operation and HTTP status without provider body, record name or bearer token', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ error: { message: 'private-provider-error' } }, { status: 403 }));
     const store = new FirestoreStore(config, { getAccessToken: access, fetch: fetcher });
@@ -82,7 +88,7 @@ describe('Firestore REST protocol without remote access', () => {
   it('reads only v3_ records and distinguishes a missing document from provider errors', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
       expect(String(url)).toBe(`https://firestore.googleapis.com/v1/${parent}:batchGet`);
-      expect(init?.redirect).toBe('error');
+      expect(init?.redirect).toBe('manual');
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fake-test-token');
       expect(body(init).documents).toEqual([`${parent}/v3_entries/a`]);
       return Response.json([{ found: doc('a', { version: 2 }), readTime: time }]);
