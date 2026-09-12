@@ -61,4 +61,28 @@ describe('published playlist music boundary', () => {
     const invalid = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json(tracks)).mockResolvedValueOnce(new Response('<html>', { headers: { 'content-type': 'text/html', 'content-length': '6' } }));
     await expect(createMusicHandler('https://music.xvyin.com', invalid)(path('cover/qq_main/123'), snapshot(), 'req')).rejects.toMatchObject({ code: 'MUSIC_UNAVAILABLE' });
   });
+  it('logs only bounded stages and numeric QQ diagnostics without URLs, bodies or credentials', async () => {
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {}), secret = 'DO_NOT_LOG_PROVIDER_SECRET';
+    try {
+      const payload = { code: 0, req_0: { code: 104003, message: secret, data: { sip: [`https://qq.com/?token=${secret}`], midurlinfo: [{ songmid: 'mid1', result: 104003, purl: `media.m4a?vkey=${secret}` }] } } };
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json([{ id: '123', songmid: 'mid1' }])).mockResolvedValueOnce(new Response(descriptor())).mockResolvedValueOnce(Response.json(payload));
+      await expect(createMusicHandler('https://music.xvyin.com', fetcher)(path('stream/qq_main/123'), snapshot(), secret)).rejects.toMatchObject({ code: 'MUSIC_UNAVAILABLE' });
+      const logs = log.mock.calls.map(call => JSON.parse(String(call[0])));
+      expect(logs.find(item => item.stage === 'resolver_shape')).toMatchObject({ schemaValid: false, legacyDescriptor: true, embeddedLegacyDescriptor: false, nativeCalled: true });
+      expect(logs.find(item => item.stage === 'native_result')).toMatchObject({ qqCode: 0, qqRequestCode: 104003, qqItemCodes: [104003], hasEntries: true, hasPurl: true });
+      expect(JSON.stringify(logs)).not.toContain(secret); expect(JSON.stringify(logs)).not.toContain('https:'); expect(JSON.stringify(logs)).not.toContain('songmid');
+      expect(logs.every(item => item.requestId === null)).toBe(true);
+      const allowed = new Set(['event', 'requestId', 'stage', 'httpStatus', 'accepted', 'legacyDescriptor', 'embeddedLegacyDescriptor', 'nativeCalled', 'schemaValid', 'qqCode', 'qqRequestCode', 'qqItemCodes', 'hasEntries', 'hasPurl']);
+      expect(logs.every(item => Object.keys(item).every(key => allowed.has(key)))).toBe(true);
+    } finally { log.mockRestore(); }
+  });
+  it('distinguishes a JSON-wrapped legacy descriptor before changing resolver behavior', async () => {
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json([{ id: '123', songmid: 'mid1' }])).mockResolvedValueOnce(Response.json({ url: descriptor() }));
+      await expect(createMusicHandler('https://music.xvyin.com', fetcher)(path('stream/qq_main/123'), snapshot(), 'req')).rejects.toMatchObject({ code: 'MUSIC_UNAVAILABLE' });
+      expect(log.mock.calls.map(call => JSON.parse(String(call[0]))).find(item => item.stage === 'resolver_shape')).toMatchObject({ schemaValid: true, legacyDescriptor: false, embeddedLegacyDescriptor: true, nativeCalled: false });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally { log.mockRestore(); }
+  });
 });
