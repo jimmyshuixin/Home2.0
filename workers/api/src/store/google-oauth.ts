@@ -10,11 +10,25 @@ export const GOOGLE_OAUTH_SCOPES = {
 } as const;
 export type GoogleOAuthScope = typeof GOOGLE_OAUTH_SCOPES[keyof typeof GOOGLE_OAUTH_SCOPES];
 export interface GoogleServiceAccountConfig { projectId: string; clientEmail: string; privateKey: string }
+/** Bounded cache of completed service-account credentials only; no request objects or I/O promises. */
+export class GoogleAccessTokenCache {
+  #entry: { credential: GoogleServiceAccountConfig; scopes: string; token: string; expiresAt: number } | null = null;
+  get(credential: GoogleServiceAccountConfig, scopes: string, now: number): string | null {
+    const entry = this.#entry;
+    return entry && entry.expiresAt - now > 60 && entry.scopes === scopes
+      && entry.credential.projectId === credential.projectId && entry.credential.clientEmail === credential.clientEmail
+      && entry.credential.privateKey === credential.privateKey ? entry.token : null;
+  }
+  put(credential: GoogleServiceAccountConfig, scopes: string, token: string, expiresAt: number): void {
+    this.#entry = { credential: { ...credential }, scopes, token, expiresAt };
+  }
+}
 export interface GoogleOAuthOptions {
   scopes?: readonly GoogleOAuthScope[];
   fetch?: typeof globalThis.fetch;
   now?: () => number;
   timeoutMs?: number;
+  completedTokenCache?: GoogleAccessTokenCache;
 }
 const SAFE_EXCEPTION_NAMES = new Set(['Error', 'TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'URIError', 'EvalError', 'AggregateError', 'AbortError', 'TimeoutError', 'DataError', 'NotSupportedError', 'OperationError', 'InvalidAccessError', 'InvalidStateError', 'InvalidCharacterError', 'SecurityError']);
 /** Only fixed platform exception names may enter diagnostics; never messages or arbitrary names. */
@@ -113,6 +127,7 @@ export function createGoogleAccessTokenProvider(config: GoogleServiceAccountConf
         throw new StoreError('STORE_UNAVAILABLE');
       }
       cached = { token: data.access_token, expiresAt: issuedAt + data.expires_in };
+      options.completedTokenCache?.put(credential, scopes.join(' '), cached.token, cached.expiresAt);
       return cached.token;
     } catch (error) {
       console.error(JSON.stringify({ level: 'error', code: 'GOOGLE_OAUTH_FAILED', stage, status, exceptionName: safeStoreExceptionName(error) }));
@@ -123,6 +138,8 @@ export function createGoogleAccessTokenProvider(config: GoogleServiceAccountConf
 
   return async () => {
     if (cached && cached.expiresAt - nowSeconds() > 60) return cached.token;
+    const shared = options.completedTokenCache?.get(credential, scopes.join(' '), nowSeconds());
+    if (shared) return shared;
     if (pending) return pending;
     pending = issue();
     try { return await pending; } finally { pending = null; }

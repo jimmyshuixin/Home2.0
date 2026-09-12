@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { exportPKCS8, generateKeyPair, jwtVerify } from 'jose';
-import { createGoogleAccessTokenProvider, GOOGLE_OAUTH_SCOPES, safeStoreExceptionName, type GoogleServiceAccountConfig } from '../src/store/google-oauth';
+import { createGoogleAccessTokenProvider, GoogleAccessTokenCache, GOOGLE_OAUTH_SCOPES, safeStoreExceptionName, type GoogleServiceAccountConfig } from '../src/store/google-oauth';
 
 let config: GoogleServiceAccountConfig;
 let publicKey: CryptoKey;
@@ -14,6 +14,30 @@ beforeEach(() => { vi.spyOn(console, 'error').mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('request-scoped service-account OAuth', () => {
+  it('reuses only completed tokens across requests and invalidates on expiry, credential or scope changes', async () => {
+    const completedTokenCache = new GoogleAccessTokenCache(); let now = instant; let issued = 0;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ access_token: `test-token-${++issued}`, token_type: 'Bearer', expires_in: 3600 }));
+    const options = { fetch: fetcher, now: () => now, completedTokenCache };
+    expect(await createGoogleAccessTokenProvider(config, options)()).toBe('test-token-1');
+    expect(await createGoogleAccessTokenProvider({ ...config }, options)()).toBe('test-token-1');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    now += 3550_000;
+    expect(await createGoogleAccessTokenProvider(config, options)()).toBe('test-token-2');
+    expect(await createGoogleAccessTokenProvider(config, { ...options, scopes: [GOOGLE_OAUTH_SCOPES.identityToolkit] })()).toBe('test-token-3');
+    expect(completedTokenCache.get({ ...config, privateKey: 'rotated' }, GOOGLE_OAUTH_SCOPES.identityToolkit, now / 1000)).toBeNull();
+    expect(completedTokenCache.get({ ...config, projectId: 'another-project' }, GOOGLE_OAUTH_SCOPES.identityToolkit, now / 1000)).toBeNull();
+    expect(completedTokenCache.get({ ...config, clientEmail: 'another@auth-test-project.iam.gserviceaccount.com' }, GOOGLE_OAUTH_SCOPES.identityToolkit, now / 1000)).toBeNull();
+  });
+  it('does not share in-flight I/O promises or cache a failed token issuance', async () => {
+    const completedTokenCache = new GoogleAccessTokenCache();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ error: 'test' }, { status: 503 }));
+    const options = { fetch: fetcher, now: () => instant, completedTokenCache };
+    await expect(createGoogleAccessTokenProvider(config, options)()).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
+    fetcher.mockImplementation(async () => Response.json({ access_token: 'test-token', token_type: 'Bearer', expires_in: 3600 }));
+    const a = createGoogleAccessTokenProvider(config, options), b = createGoogleAccessTokenProvider(config, options);
+    expect(await Promise.all([a(), b()])).toEqual(['test-token', 'test-token']);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
   it('rejects redirects without a second request or accepting a token-shaped redirect body', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ access_token: 'redirect-token', token_type: 'Bearer', expires_in: 3600 }, { status: 307, headers: { Location: 'https://untrusted.invalid/token' } }));
     await expect(createGoogleAccessTokenProvider(config, { fetch: fetcher })()).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
