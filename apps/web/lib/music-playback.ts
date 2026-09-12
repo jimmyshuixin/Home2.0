@@ -12,6 +12,7 @@ export interface PlaybackAudio extends EventTarget {
 export const emptyPlaybackState = (): MusicPlaybackState => ({ key: null, status: 'idle', desiredPlay: false, playing: false, position: 0, duration: null, error: '' })
 interface PlaybackOptions {
   resolveQq(input: QqPlaybackRequest, signal: AbortSignal): Promise<string>
+  nextSelection?(): MusicSelection | null
   onState?(state: MusicPlaybackState): void
   activateFocus?(audio: PlaybackAudio): void
   subscribeFocus?(listener: (audio: PlaybackAudio) => void): () => void
@@ -80,6 +81,7 @@ export class MusicPlaybackController {
     if (this.disposed || !this.selection || !this.audio) return Promise.resolve()
     if (this.playPromise) return this.playPromise
     if (!this.audio.paused && !this.audio.ended) return Promise.resolve()
+    if (this.audio.ended) { this.cancel(); this.audio.currentTime = 0; this.sync() }
     this.recoveryCount = 0
     return this.beginPlay(false, this.stateValue.position)
   }
@@ -170,7 +172,19 @@ export class MusicPlaybackController {
       const position = this.pendingSeek.position; this.pendingSeek = null
       audio.currentTime = Math.max(0, Math.min(audio.duration, position))
     }
-    if (event.type === 'ended') this.update({ desiredPlay: false, status: 'paused' })
+    if (event.type === 'ended') {
+      const advance = audio.ended && this.stateValue.desiredPlay
+      const generation = this.generation, key = this.selection?.key
+      this.update({ desiredPlay: false, status: 'paused' }); this.sync()
+      // Defer until the native event completes. Pause, selection, disposal and other media
+      // invalidate this generation, including when they happen in the same event turn.
+      if (advance && key && this.options.nextSelection) void Promise.resolve().then(() => {
+        if (!this.current(generation, key) || audio !== this.audio || !audio.ended) return
+        const next = this.options.nextSelection?.()
+        if (next) return this.select(next, true)
+      })
+      return
+    }
     if ((event.type === 'play' || event.type === 'playing') && !this.stateValue.desiredPlay) audio.pause()
     this.sync()
   }
