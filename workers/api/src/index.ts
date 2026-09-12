@@ -26,7 +26,7 @@ export default {
     const githubToken = env.GITHUB_TOKEN;
     const runtime = createApi({ store, bucket: env.CONTENT, auth: createAuthProvider(authConfig.success ? authConfig.data : undefined, { getGoogleAccessToken }), now: Date.now, secureCookies: true, allowedOrigins: [env.PUBLIC_ORIGIN], privacySalt: env.PRIVACY_SALT || '', adminUsername: authConfig.success ? authConfig.data.adminUsername : '', codeSha: env.BUILD_CODE_SHA,
       verifyRunner: request => verifyGitHubRunner(request, { repository: env.BUILD_REPOSITORY, ref: env.BUILD_REF, audience: `${env.PUBLIC_ORIGIN}/v3-runner` }),
-      music: (request, snapshot, requestId) => createMusicHandler(env.MUSIC_ORIGIN)(request, snapshot, requestId),
+      music: (request, snapshot, requestId) => createMusicHandler(env.MUSIC_ORIGIN, globalThis.fetch.bind(globalThis), env.PUBLIC_ORIGIN)(request, snapshot, requestId),
       ...(githubToken ? { dispatchBuild: job => dispatchGitHubBuild(job, { token: githubToken, repository: env.BUILD_REPOSITORY, ref: env.BUILD_REF, origin: env.PUBLIC_ORIGIN }), dispatchMedia: assetId => dispatchGitHubMedia(assetId, { token: githubToken, repository: env.BUILD_REPOSITORY, ref: env.BUILD_REF, origin: env.PUBLIC_ORIGIN }) } : {}),
     });
     return runtime.app.fetch(request);

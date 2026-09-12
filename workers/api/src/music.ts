@@ -3,6 +3,7 @@ import { IdSchema } from '@xvyin/contracts';
 import { assert, ApiError } from './errors';
 import { readBoundedJson } from './store/google-oauth';
 import type { Snapshot } from './releases';
+import { qqBrowserPage } from './qq-browser';
 const musicId = z.string().regex(/^[A-Za-z0-9_.:-]{1,160}$/u);
 const providerTrack = z.object({ id: z.union([z.string(), z.number()]).transform(String), songmid: z.string().optional(), title: z.string().optional(), name: z.string().optional(), author: z.union([z.string(), z.array(z.string())]).optional(), artist: z.union([z.string(), z.array(z.string())]).optional(), pic: z.string().optional(), cover: z.string().optional(), lrc: z.string().optional() });
 type DiagnosticStage = 'provider_fetch' | 'provider_decode' | 'resolver_shape' | 'native_fetch' | 'native_decode' | 'native_result' | 'native_destination';
@@ -51,7 +52,7 @@ function legacyQQDescriptor(value: unknown, songmid: string): boolean {
   } catch { return false; }
 }
 /** Only the site's configured published playlists can be resolved; never an arbitrary URL proxy. */
-export function createMusicHandler(origin: string, fetcher: typeof fetch = globalThis.fetch.bind(globalThis)) {
+export function createMusicHandler(origin: string, fetcher: typeof fetch = globalThis.fetch.bind(globalThis), siteOrigin = 'https://test.xvyin.com') {
   assert(origin === 'https://music.xvyin.com', 'MUSIC_NOT_CONFIGURED', 503, '音乐来源未配置');
   async function upstream(server: string, type: string, id: string, requestId?: string): Promise<unknown> {
     const url = new URL(origin); url.search = new URLSearchParams({ server, type, id: musicId.parse(id), limit: 'all' }).toString();
@@ -106,7 +107,7 @@ export function createMusicHandler(origin: string, fetcher: typeof fetch = globa
   }
   return async (request: Request, snapshot: Snapshot, requestId: string): Promise<Response> => {
     assert(request.method === 'GET' || request.method === 'HEAD', 'METHOD_NOT_ALLOWED', 405, '音乐接口只接受读取');
-    const match = /^\/api\/v1\/music\/(playlist|stream|lyrics|cover)\/([^/]+)(?:\/([^/]+))?$/u.exec(new URL(request.url).pathname);
+    const match = /^\/api\/v1\/music\/(playlist|stream|lyrics|cover|browser)\/([^/]+)(?:\/([^/]+))?$/u.exec(new URL(request.url).pathname);
     assert(match, 'NOT_FOUND', 404, '音乐接口不存在');
     const mode = match[1]!, playlistId = IdSchema.parse(decodeURIComponent(match[2]!)), trackId = match[3] ? musicId.parse(decodeURIComponent(match[3])) : null;
     const playlist = snapshot.playlists.find(item => item.id === playlistId && item.enabled);
@@ -119,8 +120,12 @@ export function createMusicHandler(origin: string, fetcher: typeof fetch = globa
     assert(playlist.sourceId, 'MUSIC_NOT_CONFIGURED', 503, '外部歌单地址尚未设置');
     const parsedTracks = z.array(providerTrack).max(1000).safeParse(await upstream(playlist.source, 'playlist', playlist.sourceId));
     assert(parsedTracks.success, 'MUSIC_UNAVAILABLE', 503, '音乐平台返回了暂不兼容的歌单'); const tracks = parsedTracks.data;
-    if (mode === 'playlist') return json(tracks.filter(track => musicId.safeParse(track.id).success).map(track => ({ id: track.id, title: (track.title || track.name || '未命名曲目').slice(0, 240), artist: [track.author || track.artist || ''].flat().join(' / ').slice(0, 240), url: `/api/v1/music/stream/${playlist.id}/${encodeURIComponent(track.id)}`, coverUrl: playlist.source === 'tencent' && qqCover(track.pic || track.cover) ? `/api/v1/music/cover/${playlist.id}/${encodeURIComponent(track.id)}` : publicMediaUrl(track.pic || track.cover), lyrics: track.lrc?.startsWith('[') ? track.lrc.slice(0, 100000) : '', lyricsUrl: `/api/v1/music/lyrics/${playlist.id}/${encodeURIComponent(track.id)}` })));
+    if (mode === 'playlist') return json(tracks.filter(track => musicId.safeParse(track.id).success).map(track => ({ id: track.id, title: (track.title || track.name || '未命名曲目').slice(0, 240), artist: [track.author || track.artist || ''].flat().join(' / ').slice(0, 240), url: `/api/v1/music/stream/${playlist.id}/${encodeURIComponent(track.id)}`, ...(playlist.source === 'tencent' && /^[A-Za-z0-9]{1,80}$/u.test(track.songmid || track.id) ? { playback: { kind: 'qq-anonymous', songmid: track.songmid || track.id }, sourceUrl: `https://y.qq.com/n/ryqq/songDetail/${encodeURIComponent(track.songmid || track.id)}` } : {}), coverUrl: playlist.source === 'tencent' && qqCover(track.pic || track.cover) ? `/api/v1/music/cover/${playlist.id}/${encodeURIComponent(track.id)}` : publicMediaUrl(track.pic || track.cover), lyrics: track.lrc?.startsWith('[') ? track.lrc.slice(0, 100000) : '', lyricsUrl: `/api/v1/music/lyrics/${playlist.id}/${encodeURIComponent(track.id)}` })));
     const track = tracks.find(item => item.id === trackId); assert(track, 'NOT_FOUND', 404, '曲目不在公开歌单中');
+    if (mode === 'browser') {
+      assert(playlist.source === 'tencent', 'NOT_FOUND', 404, 'QQ 播放接口不存在');
+      return qqBrowserPage(request, track.songmid || track.id, siteOrigin);
+    }
     if (mode === 'cover') {
       const location = playlist.source === 'tencent' ? qqCover(track.pic || track.cover) : undefined;
       assert(location, 'NOT_FOUND', 404, '曲目封面不存在');

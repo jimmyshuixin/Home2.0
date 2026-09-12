@@ -33,7 +33,7 @@ export async function serveObject(bucket: R2Bucket, key: string, request: Reques
     headers.set('content-range', `bytes ${offset}-${offset + length - 1}/${object.size}`); headers.set('content-length', String(length)); status = 206;
   } else headers.set('content-length', String(object.size));
   if (contentType.startsWith('text/html')) {
-    headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob: https:; font-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+    headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob: https:; font-src 'self'; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
     headers.set('x-frame-options', 'DENY');
   }
   return new Response(request.method === 'HEAD' ? null : object.body, { status, headers });

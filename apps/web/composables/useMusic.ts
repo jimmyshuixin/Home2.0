@@ -1,25 +1,58 @@
 import { assetVariant, safeUrl, site, type Track, type Playlist } from '~/lib/site'
+import { emptyPlaybackState, MusicPlaybackController, MusicRequestSequence, type MusicPlaybackState, type MusicSelection } from '~/lib/music-playback'
+import { resolveQqBrowser } from '~/lib/qq-browser-resolver'
+
+interface ClientMusicRuntime { controller: MusicPlaybackController; requests: MusicRequestSequence; audio?: HTMLAudioElement }
+// WeakMap keys are individual Nuxt apps. Controllers/promises never enter SSR state.
+const clientRuntimes = new WeakMap<object, ClientMusicRuntime>()
+
 export function useMusic() {
-  const api = useApi()
+  const nuxt = useNuxtApp(), api = useApi()
   const playlists = useState<Playlist[]>('music-playlists', () => site.playlists)
-  const playlistId = useState<string>('music-playlist', () => site.playlists.find((p) => p.isDefault)?.id || site.playlists[0]?.id || '')
-  const tracks = useState<Track[]>('music-tracks', () => site.playlists.find((p) => p.id === playlistId.value)?.tracks || [])
+  const playlistId = useState<string>('music-playlist', () => site.playlists.find(p => p.isDefault)?.id || site.playlists[0]?.id || '')
+  const tracks = useState<Track[]>('music-tracks', () => site.playlists.find(p => p.id === playlistId.value)?.tracks || [])
   const index = useState('music-index', () => 0)
-  const playing = useState('music-playing', () => false)
-  const duration = useState('music-duration', () => NaN)
-  const position = useState('music-position', () => 0)
+  const playback = useState<MusicPlaybackState>('music-playback', emptyPlaybackState)
   const volume = useState('music-volume', () => .7)
   const loading = useState('music-loading', () => false)
-  const error = useState('music-error', () => '')
+  const playlistError = useState('music-playlist-error', () => '')
   const repeat = useState('music-repeat', () => false)
   const track = computed(() => tracks.value[index.value])
+  const playing = computed(() => playback.value.playing)
+  const duration = computed(() => playback.value.duration ?? NaN)
+  const position = computed(() => playback.value.position)
+  const resolving = computed(() => playback.value.status === 'resolving')
+  const pendingPlay = computed(() => playback.value.desiredPlay)
+  const error = computed(() => playlistError.value || playback.value.error)
+  const source = computed(() => playback.value.source)
+  function selection(): MusicSelection | null {
+    const value = track.value
+    if (!value) return null
+    const qq = value.playback?.kind === 'qq-anonymous' && /^[A-Za-z0-9]{1,80}$/u.test(value.playback.songmid)
+      ? { songmid: value.playback.songmid, playlistId: playlistId.value, trackId: value.id } : undefined
+    const direct = safeUrl(value.url || value.audioUrl) || assetVariant(value.assetId, 'playback')?.url
+    return { key: `${site.releaseId}:${playlistId.value}:${value.id}:${qq?.songmid || value.assetId || direct || ''}`, ...(qq ? { qq } : { source: direct }) }
+  }
+  const canPlay = computed(() => { const value = selection(); return Boolean(value?.qq || value?.source) })
+  let runtime = import.meta.client ? clientRuntimes.get(nuxt) : undefined
+  if (import.meta.client && !runtime) {
+    const controller = new MusicPlaybackController({
+      resolveQq: resolveQqBrowser,
+      onState: state => { playback.value = state },
+      activateFocus: audio => nuxt.$mediaFocus.activate(audio as HTMLAudioElement),
+      subscribeFocus: listener => nuxt.$mediaFocus.onActivate(listener),
+    })
+    runtime = { controller, requests: new MusicRequestSequence() }
+    clientRuntimes.set(nuxt, runtime)
+    void controller.select(selection())
+    nuxt.vueApp.onUnmount(() => { controller.dispose(); clientRuntimes.delete(nuxt) })
+  }
+
   const lyricsCache = useState<Record<string, { status: 'loading' | 'ready' | 'error'; text: string; error: string }>>('music-lyrics-cache', () => ({}))
   const lyricsRecord = computed(() => track.value?.lyricsUrl ? lyricsCache.value[track.value.lyricsUrl] : undefined)
   const lyrics = computed(() => track.value?.lyrics || lyricsRecord.value?.text || '')
   const lyricsLoading = computed(() => lyricsRecord.value?.status === 'loading')
   const lyricsError = computed(() => lyricsRecord.value?.error || '')
-  const source = computed(() => safeUrl(track.value?.url || track.value?.audioUrl) || assetVariant(track.value?.assetId, 'playback')?.url)
-  const element = () => import.meta.client ? document.getElementById('site-music') as HTMLAudioElement | null : null
   async function loadLyrics(force = false) {
     const url = track.value?.lyricsUrl
     if (track.value?.lyrics || !url || !/^\/api\/v1\/music\/lyrics\/[^/?#]+\/[^/?#]+$/.test(url)) return
@@ -32,38 +65,47 @@ export function useMusic() {
     } catch { lyricsCache.value[url] = { status: 'error', text: '', error: '歌词暂时无法加载，音乐播放不受影响。' } }
   }
   async function refresh() {
-    loading.value = true; error.value = ''
+    if (!runtime) return
+    const request = runtime.requests.beginRefresh()
+    loading.value = true; playlistError.value = ''
     try {
-      playlists.value = (await api<(Playlist & { name?: string })[]>('/playlists')).data.map((playlist) => ({ ...playlist, title: playlist.name || playlist.title }))
-      if (!playlists.value.some((p) => p.id === playlistId.value)) playlistId.value = playlists.value.find((p) => p.isDefault)?.id || playlists.value[0]?.id || ''
-      if (playlistId.value) await selectPlaylist(playlistId.value)
-    } catch (cause) { error.value = cause instanceof Error ? cause.message : '歌单暂时无法加载。' }
-    finally { loading.value = false }
+      const available = (await api<(Playlist & { name?: string })[]>('/playlists')).data.map(playlist => ({ ...playlist, title: playlist.name || playlist.title }))
+      if (!runtime.requests.currentRefresh(request)) return
+      playlists.value = available
+      const id = available.some(p => p.id === playlistId.value) ? playlistId.value : available.find(p => p.isDefault)?.id || available[0]?.id || ''
+      if (id) await selectPlaylist(id)
+      else { playlistId.value = ''; tracks.value = []; index.value = 0; await runtime.controller.select(null); loading.value = false }
+    } catch { if (runtime.requests.currentRefresh(request)) playlistError.value = '歌单暂时无法加载，请重试。' }
+    finally { if (runtime.requests.currentRefresh(request)) loading.value = false }
   }
   async function selectPlaylist(id: string) {
-    loading.value = true; error.value = ''
+    if (!runtime) return
+    const request = runtime.requests.beginSelection()
+    runtime.controller.pause(); loading.value = true; playlistError.value = ''
     try {
       const result = (await api<Track[] | { tracks: Track[] }>(`/music/playlist/${encodeURIComponent(id)}`)).data
-      element()?.pause(); tracks.value = Array.isArray(result) ? result : result.tracks
-      playlistId.value = id; index.value = 0; position.value = 0; duration.value = NaN
-    } catch (cause) { error.value = cause instanceof Error ? cause.message : '歌单暂时无法加载，已保留之前的曲目。' }
-    finally { loading.value = false }
+      if (!runtime.requests.currentSelection(request)) return
+      tracks.value = Array.isArray(result) ? result : result.tracks
+      playlistId.value = id; index.value = 0
+      await runtime.controller.select(selection())
+    } catch { if (runtime.requests.currentSelection(request)) playlistError.value = '歌单暂时无法加载，已保留之前的曲目。' }
+    finally { if (runtime.requests.currentSelection(request)) loading.value = false }
   }
-  async function play() {
-    if (!source.value) return
-    const audio = element(); if (!audio) return
-    error.value = ''; useNuxtApp().$mediaFocus?.activate(audio)
-    try { await audio.play() } catch { error.value = '暂时无法播放这首歌，请重试或选择其他曲目。' }
+  function attach(audio: HTMLAudioElement) { if (runtime) { runtime.audio = audio; audio.volume = volume.value; runtime.controller.attach(audio) } }
+  function detach() { if (runtime) { runtime.controller.detach(); runtime.audio = undefined } }
+  function beginInteraction() { runtime?.requests.beginSelection(); loading.value = false; playlistError.value = '' }
+  function play() { beginInteraction(); return runtime?.controller.play() }
+  function toggle() { beginInteraction(); return runtime?.controller.toggle() }
+  function retry() { if (playlistError.value) return refresh(); beginInteraction(); return runtime?.controller.retry() }
+  function selectTrack(next: number, start = true) {
+    if (!runtime || next < 0 || next >= tracks.value.length) return
+    runtime.requests.beginSelection(); loading.value = false; playlistError.value = ''; index.value = next
+    return runtime.controller.select(selection(), start)
   }
-  async function selectTrack(next: number, start = true) {
-    if (next < 0 || next >= tracks.value.length) return
-    element()?.pause(); index.value = next; position.value = 0; duration.value = NaN
-    await nextTick(); element()?.load(); if (start) await play()
-  }
-  function toggle() { const audio = element(); if (!audio) return; if (audio.paused) void play(); else audio.pause() }
-  function seek(value: number) { const audio = element(); if (audio && Number.isFinite(audio.duration)) audio.currentTime = Math.min(audio.duration, Math.max(0, value)) }
-  function setVolume(value: number) { volume.value = value; const audio = element(); if (audio) audio.volume = value }
-  function previous() { void selectTrack((index.value - 1 + tracks.value.length) % tracks.value.length) }
-  function next() { void selectTrack((index.value + 1) % tracks.value.length) }
-  return { playlists, playlistId, tracks, track, source, index, playing, duration, position, volume, loading, error, repeat, lyrics, lyricsLoading, lyricsError, loadLyrics, refresh, selectPlaylist, selectTrack, toggle, seek, setVolume, previous, next, play }
+  function seek(value: number) { runtime?.controller.seek(value) }
+  function setVolume(value: number) { volume.value = Math.max(0, Math.min(1, value)); if (runtime?.audio) runtime.audio.volume = volume.value }
+  function previous() { if (tracks.value.length) void selectTrack((index.value - 1 + tracks.value.length) % tracks.value.length) }
+  function next() { if (tracks.value.length) void selectTrack((index.value + 1) % tracks.value.length) }
+  return { playlists, playlistId, tracks, track, source, canPlay, index, playing, pendingPlay, resolving, duration, position, volume, loading, error, repeat,
+    lyrics, lyricsLoading, lyricsError, loadLyrics, refresh, selectPlaylist, selectTrack, toggle, seek, setVolume, previous, next, play, retry, attach, detach }
 }
