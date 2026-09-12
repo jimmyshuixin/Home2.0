@@ -57,6 +57,12 @@ node --import tsx scripts/v3/publish.ts --job <后台任务UUID> --origin https:
 
 `.github/workflows/v3-content.yml` 使用 `workflow_dispatch`，要求输入任务 UUID、批准的网站地址与精确的代码 SHA。工作流所在提交 `GITHUB_SHA` 必须等于输入 SHA，检出也是该 SHA。OIDC 的 audience 是 `${origin}/v3-runner`；API 还验证仓库、分支、工作流路径、事件和 SHA。凭证只在请求时获得并定期刷新，不写入文件。
 
+GitHub 执行器的逻辑站点为 `https://test.xvyin.com` 时，内部请求固定经同一 Pages 项目的 `https://xvyin-v3-test.pages.dev/api/v1/internal/` 传输。此入口解决测试域浏览器验证对非浏览器执行器的拦截；没有关闭主域安全功能或更改套餐。`Origin` 请求头、OIDC audience、代码/任务校验、快照链接和生成站点仍使用 `https://test.xvyin.com`。后端仍验证每个内部请求的 OIDC，不因来自 Pages 地址就放行。公开接口、管理员 Cookie、本地执行模式及 `https://xvyin.com` 的执行器均不切换地址。
+
+传输地址是代码内固定映射，没有环境变量、CLI 参数或服务端响应可替换主机。只允许规范的 `/api/v1/internal/` 路径，拒绝编码路径穿越、反斜杠、片段和任意绝对 URL；静态文件路径参数仍作为原查询字符串传递。所有请求禁止重定向，调用者注入的 Host/认证头会被移除。遇到 `cf-mitigated: challenge` 返回 `CLOUDFLARE_CHALLENGE`，非 JSON 页面返回 `NON_JSON_RESPONSE`，损坏的 JSON 返回 `INVALID_RESPONSE`。错误不包含响应正文、Cookie 或 token，网络/网关类故障保留可续跑状态。
+
+媒体工作流在 `npm ci --ignore-scripts` 后于 `apps/web` 显式执行 `npm exec -- nuxt prepare`，生成 `apps/web/.nuxt/tsconfig.json` 后再运行共享执行器类型检查与媒体测试。不要依赖开发机残留的 `.nuxt` 或恢复含私有内容的 CI cache 来补该文件。
+
 只声明 `contents: read` 与 `id-token: write`。没有上传 artifacts、缓存构建结果、长效云密钥、PR 触发器或自动激活步骤。`npm ci --ignore-scripts` 使用锁文件；该仓库已验证的原生工具来自已安装的包文件，不在工作流任意运行安装脚本。若后续引入必须运行安装脚本的新依赖，应先审查并明确修改工作流。
 
 在后台创建候选并不等于 GitHub 工作流已经收到派发。生产环境需要实际配置后台 dispatcher，或由管理员运行上述本地命令。缺少 dispatcher / OIDC 配置时应如实保留排队或配置错误状态，不能伪造运行编号、构建进度或 ready 状态。

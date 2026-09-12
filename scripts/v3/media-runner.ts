@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { DetectedMediaMetadataSchema, IdSchema, UploadMetadataSchema, type UploadMetadata } from '@xvyin/contracts';
 import { hashFile, MediaProcessingError, processMedia, type ProcessedMedia } from './process-media';
 import { ProcessingVariantSchema } from '../../workers/api/src/processing';
-import { createRunnerTransport, readCredentials, validateOrigin } from './publish';
+import { createRunnerTransport, PublishError, readCredentials, validateOrigin } from './publish';
 
 /** Authentication/refresh is supplied by the shared private-runner HTTP client. */
 export interface MediaRunnerClient { request(path: string, init?: RequestInit): Promise<Response> }
@@ -178,4 +178,10 @@ export async function mediaRunnerCli(args = process.argv.slice(2)): Promise<void
   const result = await runMedia({ assetId, client, privateRoot, log: event => process.stdout.write(`${JSON.stringify(event)}\n`) });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) mediaRunnerCli().catch(error => { process.stderr.write(`${JSON.stringify({ code: error instanceof MediaRunnerError || error instanceof MediaProcessingError ? error.code : 'MEDIA_RUNNER_FAILED', message: '媒体处理未完成；本地私密文件与服务端容量记录已保留，可核对后重试。' })}\n`); process.exitCode = 1; });
+/** Expose only validated error categories; provider bodies and credentials never reach CLI output. */
+export function mediaRunnerFailure(error: unknown): { code: string; message: string } {
+  const known = error instanceof MediaRunnerError || error instanceof MediaProcessingError || error instanceof PublishError;
+  const code = known && /^[A-Z0-9_]{1,80}$/u.test(error.code) ? error.code : 'MEDIA_RUNNER_FAILED';
+  return { code, message: '媒体处理未完成；本地私密文件与服务端容量记录已保留，可核对后重试。' };
+}
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) mediaRunnerCli().catch(error => { process.stderr.write(`${JSON.stringify(mediaRunnerFailure(error))}\n`); process.exitCode = 1; });
