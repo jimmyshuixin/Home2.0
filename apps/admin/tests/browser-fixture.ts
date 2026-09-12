@@ -1,0 +1,15 @@
+/** Local UI verification only. This entry is excluded from all Vite builds and cloud deploys.
+ * It exercises the real API routes, CSRF, validation and records using a test identity.
+ * It does not connect to Firebase, Google, Cloudflare or GitHub. Do not use as a dev backend.
+ */
+import {serve} from '@hono/node-server';
+import {readFile} from 'node:fs/promises';import {resolve,extname} from 'node:path';
+import {createApi} from '../../../workers/api/src/app';import {MemoryStore} from '../../../workers/api/src/store/memory';import {AuthError,type AuthProvider} from '../../../workers/api/src/auth';
+if(process.env.XVYIN_UI_FIXTURE!=='1')throw new Error('Set XVYIN_UI_FIXTURE=1 explicitly for isolated browser UI verification.');
+const host='http://127.0.0.1:5194';const testUid='ui-test-only';
+const auth:AuthProvider={async signIn({username,password}){if(username!=='ui-fixture'||password!=='test-only-not-a-real-account')throw new AuthError('AUTH_INVALID_CREDENTIALS');return{uid:testUid,authTime:Math.floor(Date.now()/1000)};},async assertSession(identity){if(identity.uid!==testUid)throw new AuthError('AUTH_SESSION_REVOKED');},async changePassword(){throw new AuthError('AUTH_NOT_CONFIGURED');},async requestPasswordReset(){throw new AuthError('AUTH_NOT_CONFIGURED');},async confirmPasswordReset(){throw new AuthError('AUTH_NOT_CONFIGURED');},async revokeAllSessions(){}};
+// The UI exercise deliberately has no storage upload/remote build capability.
+const bucket={async get(){return null;},async head(){return null;},async put(){throw new Error('R2 operations disabled in UI fixture');}} as unknown as R2Bucket;
+const api=createApi({store:new MemoryStore(),bucket,auth,now:Date.now,secureCookies:false,allowedOrigins:[host],privacySalt:'local-test-only-nonsecret-salt-xxxxxxxxxxxxxxxx',adminUsername:'ui-fixture',codeSha:'a'.repeat(40)}).app;
+const root=resolve(import.meta.dirname,'../dist');
+serve({hostname:'127.0.0.1',port:5194,fetch:async request=>{const url=new URL(request.url);if(url.pathname.startsWith('/api/'))return api.fetch(request);let path=url.pathname.startsWith('/admin/assets/')||url.pathname.startsWith('/admin/fonts/')?resolve(root,url.pathname.slice('/admin/'.length)):resolve(root,'index.html');if(!path.startsWith(root+'/')&&!path.startsWith(root+'\\'))return new Response('Not found',{status:404});try{let body=await readFile(path);if(extname(path)==='.html')body=Buffer.from(body.toString('utf8').replace('<title>','<title>本地 UI 验证 · ').replace('</body>','<div style="position:fixed;bottom:0;left:0;right:0;z-index:10000;background:#7b392e;color:white;text-align:center;padding:3px;font:11px sans-serif">本地 UI 测试夹具 · 无远端账号、无云端发布 · 重启后测试记录清空</div></body>'));return new Response(body,{headers:{'content-type':({'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.woff':'font/woff'} as Record<string,string>)[extname(path)]??'application/octet-stream','cache-control':'no-store'}});}catch{return new Response('Not found',{status:404});}}},()=>console.log('Isolated UI fixture: http://127.0.0.1:5194/admin/ (test-only identity; no remote writes)'));

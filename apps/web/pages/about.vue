@@ -1,0 +1,5 @@
+<script setup lang="ts">
+import { site, safeUrl } from '~/lib/site'
+useSeoMeta({ title: '关于 · 虚宁', description: site.settings.intro })
+</script>
+<template><section class="page-heading"><h1>关于我<span class="dot" aria-hidden="true" /></h1><p>{{ site.settings.intro }}</p></section><div class="about-layout"><article class="prose"><ContentBlocks v-if="site.settings.aboutBlocks.length" :blocks="site.settings.aboutBlocks" /><p v-else class="muted">更完整的自我介绍正在整理。你可以先从创作、摄影和日常记录认识我。</p><div class="actions"><NuxtLink class="button primary" to="/creations">探索创作<SiteIcon name="arrow" /></NuxtLink><NuxtLink class="text-link" to="/contact">联系我<SiteIcon name="external" /></NuxtLink></div><section v-if="site.settings.socialLinks.length" class="social-links"><h2>也在这里</h2><a v-for="link in site.settings.socialLinks.filter((item) => safeUrl(item.url))" :key="link.url" :href="safeUrl(link.url)" target="_blank" rel="noopener noreferrer">{{ link.label }}<SiteIcon name="external" :size="18" /></a></section></article><img src="/brand/portrait.webp" alt="虚宁的原手绘头像" width="360" height="360" class="about-portrait"></div></template>

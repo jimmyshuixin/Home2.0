@@ -1,4 +1,6 @@
 # 虚静以宁 - 个人主页全栈项目
+
+> 当前 `codex/v3-production` 分支的 V3 实现位于 `apps/`、`workers/` 和 `packages/`。请从 [V3 接手及部署状态](docs/v3/START-HERE.md) 开始。下方保留的 V1/V2 说明与图片属于旧版资料，不表示 V3 已部署。测试域名指定为 `test.xvyin.com`。
 ## 当前index.html中的代码为ver 2.0版本，喜欢ver 1.0可以在version中找到
 这是一个高度可定制、功能丰富的现代化个人主页项目。前端基于原生 HTML/CSS/JavaScript 和 **Vue.js 3** 构建，后端完全由 **Cloudflare Workers** 驱动，构成了一套完整、安全、高性能的 **Serverless** 架构。
 

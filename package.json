@@ -3,10 +3,26 @@
   "version": "3.0.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "workers/api"
+  ],
+  "engines": {
+    "node": ">=22.19.0 <23 || >=24.0.0"
+  },
   "scripts": {
-    "dev": "vite",
-    "build": "vite build && node scripts/copy-static.mjs",
-    "preview": "vite preview --host 127.0.0.1",
+    "dev": "npm run dev:web",
+    "dev:web": "npm run dev --workspace @xvyin/web",
+    "dev:admin": "npm run dev --workspace @xvyin/admin",
+    "dev:legacy": "vite",
+    "build": "npm run generate --workspace @xvyin/web && npm run build --workspace @xvyin/admin",
+    "build:legacy": "vite build && node scripts/copy-static.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev:api": "tsx scripts/dev-api.ts",
+    "preview": "npm run preview --workspace @xvyin/web",
+    "preview:legacy": "vite preview --host 127.0.0.1",
     "dev:music": "wrangler dev --config wrangler.music.jsonc",
     "deploy:music": "wrangler deploy --config wrangler.music.jsonc",
     "check:music": "wrangler deploy --config wrangler.music.jsonc --dry-run",
@@ -22,7 +38,20 @@
     "vue": "^3.5.25"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "5.20260911.1",
+    "@hono/node-server": "^1.19.0",
+    "@types/node": "^22.19.0",
+    "hono": "4.13.7",
+    "jose": "6.2.12",
+    "miniflare": "5.20260911.0-alpha",
+    "pdf-lib": "1.17.1",
     "playwright-core": "^1.60.0",
-    "wrangler": "^4.95.0"
+    "sharp": "0.35.4",
+    "tsx": "^4.21.0",
+    "typescript": "5.9.3",
+    "vitest": "5.0.0",
+    "vue-tsc": "^3.1.0",
+    "wrangler": "4.131.1",
+    "zod": "4.6.2"
   }
 }

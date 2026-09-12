@@ -1,0 +1,16 @@
+<script setup lang="ts">
+import { site, formats, ordered } from '~/lib/site'
+const route = useRoute(), router = useRouter()
+const keyword = ref(typeof route.query.q === 'string' ? route.query.q : '')
+const tag = computed(() => typeof route.query.tag === 'string' ? route.query.tag : '')
+const format = computed(() => typeof route.query.format === 'string' ? route.query.format : '')
+const page = computed(() => Math.max(1, Number(route.query.page) || 1))
+const tags = [...new Set(site.creations.flatMap((entry) => entry.tags))].sort()
+const results = computed(() => ordered(site.creations).filter((entry) => (!format.value || formats(entry).includes(format.value)) && (!tag.value || entry.tags.includes(tag.value)) && (!String(route.query.q || '').trim() || `${entry.title} ${entry.summary} ${entry.tags.join(' ')}`.toLocaleLowerCase().includes(String(route.query.q).trim().toLocaleLowerCase()))))
+const pageCount = computed(() => Math.max(1, Math.ceil(results.value.length / 12)))
+const visible = computed(() => results.value.slice((Math.min(page.value, pageCount.value) - 1) * 12, Math.min(page.value, pageCount.value) * 12))
+function update(values: Record<string, string>) { const query: Record<string, string | undefined> = {}; for (const [key, value] of Object.entries(route.query)) { if (typeof value === 'string') query[key] = value }; Object.assign(query, { page: undefined }, values); Object.keys(query).forEach((key) => { if (!query[key]) delete query[key] }); void router.replace({ query }) }
+watch(() => route.query.q, (q) => { keyword.value = String(q || '') })
+useSeoMeta({ title: '创作 · 虚宁', description: '文字、图片、声音与影像，放在同一条创作里。' })
+</script>
+<template><section class="page-heading"><h1>创作<span class="dot" aria-hidden="true" /></h1><p>把想法写下来，把过程留下来。</p></section><form class="list-input" @submit.prevent="update({ q: keyword })"><label class="field">搜索创作<div class="search-field"><input v-model="keyword" type="search" placeholder="搜索标题或摘要" maxlength="100"><button type="submit">搜索</button></div></label><label class="field">主题<select :value="tag" @change="update({ tag: ($event.target as HTMLSelectElement).value })"><option value="">全部主题</option><option v-for="item in tags" :key="item" :value="item">{{ item }}</option></select></label></form><div class="filters" role="group" aria-label="媒体格式"><button v-for="item in [{ id: '', label: '全部' }, { id: 'text', label: '图文' }, { id: 'audio', label: '音频' }, { id: 'video', label: '视频' }]" :key="item.id" :aria-pressed="format === item.id" @click="update({ format: item.id })">{{ item.label }}</button></div><p class="small muted" role="status">{{ results.length ? `找到 ${results.length} 条创作` : '暂无匹配的创作' }}</p><div v-if="visible.length" class="creation-list"><CreationCard v-for="entry in visible" :key="entry.id" :entry="entry" /></div><div v-else class="empty-state"><h2>{{ site.creations.length ? '没有找到相关创作' : '还没有公开创作' }}</h2><p>{{ site.creations.length ? '试试其他关键词，或清除筛选。' : '新的想法会在准备好之后出现在这里。' }}</p><button v-if="tag || format || route.query.q" @click="update({ q: '', tag: '', format: '' })">清除筛选</button></div><nav v-if="pageCount > 1" class="pagination" aria-label="创作分页"><NuxtLink v-for="n in pageCount" :key="n" :to="{ query: { ...route.query, page: n === 1 ? undefined : n } }" :aria-current="page === n ? 'page' : undefined">{{ n }}</NuxtLink></nav></template>

@@ -1,0 +1,10 @@
+<script setup lang="ts">
+import { site, ordered, displayDate } from '~/lib/site'
+const route = useRoute(), router = useRouter()
+const tag = computed(() => typeof route.query.tag === 'string' ? route.query.tag : '')
+const tags = [...new Set(site.fitness.entries.flatMap((entry) => entry.tags || []))]
+const entries = computed(() => ordered(site.fitness.entries).filter((entry) => !tag.value || entry.tags?.includes(tag.value)))
+function select(value: string) { void router.replace({ query: value ? { tag: value } : {} }) }
+useSeoMeta({ title: '健身 · 虚宁', description: site.fitness.settings.intro })
+</script>
+<template><section class="page-heading fitness-hero"><h1>把坚持，放进日常<span class="dot" aria-hidden="true" /></h1><p>{{ site.fitness.settings.intro }}</p><FitnessCounter :start-date="site.fitness.settings.startDate" /></section><section class="fitness-section"><div class="section-heading"><h2>训练影像<span class="dot" aria-hidden="true" /></h2><div v-if="tags.length" class="filters" role="group" aria-label="健身照片筛选"><button :aria-pressed="!tag" @click="select('')">全部</button><button v-for="item in tags" :key="item" :aria-pressed="tag === item" @click="select(item)">{{ item }}</button></div></div><div v-if="entries.length"><article v-for="entry in entries" :key="entry.id" class="fitness-entry"><PhotoGallery :photos="entry.photos.map((photo) => ({ ...photo, title: entry.title }))" layout="continuous" /><div class="fitness-note"><h3 v-if="entry.title">{{ entry.title }}</h3><p v-if="entry.caption">{{ entry.caption }}</p><p v-if="entry.entryDate" class="small muted">记录日期 <time :datetime="entry.entryDate">{{ displayDate(entry.entryDate) }}</time></p></div></article></div><div v-else class="empty-state"><h2>{{ tag ? '这个分类暂时没有公开影像' : '还没有公开训练影像' }}</h2><p>有了新的记录，会在这里慢慢展开。</p><button v-if="tag" @click="select('')">查看全部记录</button></div></section><p class="fitness-ending">在日常里，留下一点变化<span class="dot" aria-hidden="true" /></p></template>

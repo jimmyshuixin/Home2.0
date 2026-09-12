@@ -1,0 +1,15 @@
+{
+  "firebaseAuthConfig": {
+    "projectId": "REPLACE_WITH_FIREBASE_PROJECT_ID",
+    "apiKey": "REPLACE_WITH_FIREBASE_WEB_API_KEY",
+    "adminUid": "REPLACE_WITH_EXISTING_ADMIN_UID",
+    "adminUsername": "REPLACE_WITH_ADMIN_USERNAME",
+    "adminEmail": "REPLACE_WITH_ADMIN_EMAIL",
+    "passwordResetUrl": "https://test.xvyin.com/admin/reset-password"
+  },
+  "googleServiceAccount": {
+    "project_id": "REPLACE_WITH_THE_SAME_FIREBASE_PROJECT_ID",
+    "client_email": "REPLACE_WITH_SERVICE_ACCOUNT_EMAIL",
+    "private_key": "REPLACE_WITH_PRIVATE_KEY_IN_IGNORED_LOCAL_FILE_ONLY"
+  }
+}

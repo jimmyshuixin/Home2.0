@@ -1,0 +1,6 @@
+{
+  "extends": "../../../../tsconfig.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["./*.ts", "../../test/store.test.ts", "../../test/google-oauth.test.ts", "../../test/firestore.test.ts"],
+  "exclude": []
+}

@@ -1,0 +1,6 @@
+<script setup lang="ts">
+import { site, assetVariant, ordered } from '~/lib/site'
+const albums = ordered(site.albums)
+useSeoMeta({ title: '摄影 · 虚宁', description: '用镜头，收藏片刻。' })
+</script>
+<template><section class="page-heading"><h1>用镜头，收藏片刻<span class="dot" aria-hidden="true" /></h1><p>一些光线，一些经过的地方。</p></section><div v-if="albums.length" class="album-list"><article v-for="album in albums" :key="album.id" class="album-card"><NuxtLink :to="`/photography/${album.slug}`"><img v-if="assetVariant(album.coverAssetId || album.photos[0]?.assetId)" :src="assetVariant(album.coverAssetId || album.photos[0]?.assetId)?.url" :alt="album.title" :width="assetVariant(album.coverAssetId || album.photos[0]?.assetId)?.width" :height="assetVariant(album.coverAssetId || album.photos[0]?.assetId)?.height" loading="lazy"><h2>{{ album.title }}</h2></NuxtLink><p v-if="album.description">{{ album.description }}</p><NuxtLink class="text-link" :to="`/photography/${album.slug}`">打开这个系列<SiteIcon name="arrow" :size="18" /></NuxtLink></article></div><div v-else class="empty-state"><h2>还没有公开摄影系列</h2><p>影像正在整理，准备好后会出现在这里。</p><NuxtLink class="text-link" to="/creations">先看看创作<SiteIcon name="arrow" /></NuxtLink></div></template>

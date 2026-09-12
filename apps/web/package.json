@@ -1,0 +1,14 @@
+{
+  "name": "@xvyin/web",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev --host 127.0.0.1",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "typecheck": "nuxt typecheck"
+  },
+  "dependencies": { "@xvyin/contracts": "0.1.0", "nuxt": "4.5.2", "vue": "3.5.40", "vue-router": "5.2.0", "zod": "4.6.2" }
+}

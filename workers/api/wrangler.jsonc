@@ -1,0 +1,21 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "xvyin-v3-test-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  "r2_buckets": [{ "binding": "CONTENT", "bucket_name": "xvyin-v3-test-private" }],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://test.xvyin.com",
+    "FIREBASE_PROJECT_ID": "",
+    "FIRESTORE_DATABASE_ID": "",
+    "FIRESTORE_EDITION": "",
+    "BUILD_CODE_SHA": "",
+    "BUILD_REPOSITORY": "jimmyshuixin/Home2.0",
+    "BUILD_REF": "refs/heads/codex/v3-production",
+    "MUSIC_ORIGIN": "https://music.xvyin.com"
+  },
+  "secrets": { "required": ["GOOGLE_SERVICE_ACCOUNT", "FIREBASE_AUTH_CONFIG", "PRIVACY_SALT", "GITHUB_TOKEN"] }
+}

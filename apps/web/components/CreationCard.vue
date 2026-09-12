@@ -1,0 +1,5 @@
+<script setup lang="ts">
+import { assetVariant, displayDate, formatLabel, type Creation } from '~/lib/site'
+defineProps<{ entry: Creation; featured?: boolean }>()
+</script>
+<template><article :class="['creation-card', { 'feature-entry': featured }]"><NuxtLink v-if="entry.coverAssetId && assetVariant(entry.coverAssetId)" :to="`/creations/${entry.slug}`" tabindex="-1" aria-hidden="true"><img class="creation-cover" :src="assetVariant(entry.coverAssetId)?.url" :width="assetVariant(entry.coverAssetId)?.width" :height="assetVariant(entry.coverAssetId)?.height" alt="" loading="lazy"></NuxtLink><p class="small muted"><span v-if="entry.tags.length">{{ entry.tags.join(' / ') }}</span><time v-if="entry.publishedAt" :datetime="entry.publishedAt">{{ displayDate(entry.publishedAt) }}</time></p><h3><NuxtLink :to="`/creations/${entry.slug}`">{{ entry.title }}</NuxtLink></h3><p v-if="entry.summary">{{ entry.summary }}</p><p class="formats">{{ formatLabel(entry) }}</p><NuxtLink class="text-link" :to="`/creations/${entry.slug}`">阅读创作<SiteIcon name="arrow" :size="18" /></NuxtLink></article></template>

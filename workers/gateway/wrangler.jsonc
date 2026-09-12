@@ -1,0 +1,8 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "xvyin-v3-test",
+  "pages_build_output_dir": "../../.gateway-output",
+  "compatibility_date": "2026-09-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "services": [{ "binding": "API", "service": "xvyin-v3-test-api" }]
+}
