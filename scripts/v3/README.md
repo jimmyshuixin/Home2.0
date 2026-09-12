@@ -40,6 +40,19 @@ Nuxt 子进程只收到运行所需的基础环境变量和快照位置，不继
 
 同一个完整工作副本一次运行一个 Nuxt generate（包含集成测试）；两个构建会共用 Nuxt 的 `.data/` 和 `.output/`。并行本地构建应使用独立工作副本。GitHub Actions 的每个工作流运行具有独立检出目录。
 
+## 首次云端部署的受控执行方式
+
+`GITHUB_TOKEN` 是可选的自动派发 Secret，不是管理员登录、媒体上传或本地执行器的必需配置。没有该 Secret 时，Worker 不注入 `dispatchBuild` / `dispatchMedia`：后台可以创建候选、完成上传并返回实际任务状态，随后由管理员运行受控执行器。排队或 `processing` 不代表已有自动任务在运行。首次测试部署使用以下两个命令，凭据文件只包含真实管理员 Cookie 与 CSRF token：
+
+```powershell
+node --import tsx scripts/v3/media-runner.ts --asset <媒体ID> --origin https://test.xvyin.com --auth-file <私有会话JSON路径>
+node --import tsx scripts/v3/publish.ts --job <后台任务UUID> --origin https://test.xvyin.com --auth-file <私有会话JSON路径>
+```
+
+先把所需媒体处理至后端确认的可用状态，再准备内容候选。执行内容命令只推进到可预览状态；实际发布仍由已登录管理员在后台激活。操作必须使用当前批准版本的完整独立工作副本和真实授权会话，不能以测试 Cookie、占位 token 或 fixture 代替。完整操作、续跑与私有文件要求见本文件前文及 [媒体执行器说明](MEDIA-PROCESSING.md)。这是一条需要管理员启动的运维通道，尚不等于后台自动化已接通或首次远端运行已完成。
+
+自动化后续需配置仅限目标仓库、满足 Actions 派发所需权限的专用凭据，再通过 Cloudflare Secret 设置可选的 `GITHUB_TOKEN`。不要把本机 `gh` 登录的广范围 OAuth 凭据复制到 Worker。工作流还需完成默认分支登记及实际派发、OIDC 回调验收；用户未批准扩大权限时不以复用广权限凭据绕过这个配置缺口。
+
 ## GitHub Actions
 
 `.github/workflows/v3-content.yml` 使用 `workflow_dispatch`，要求输入任务 UUID、批准的网站地址与精确的代码 SHA。工作流所在提交 `GITHUB_SHA` 必须等于输入 SHA，检出也是该 SHA。OIDC 的 audience 是 `${origin}/v3-runner`；API 还验证仓库、分支、工作流路径、事件和 SHA。凭证只在请求时获得并定期刷新，不写入文件。

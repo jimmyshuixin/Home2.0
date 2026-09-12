@@ -1,0 +1,15 @@
+{
+  "title": "xvyin V3 test runtime",
+  "description": "Runtime Firestore data and transaction access plus fixed administrator lookup and session revocation for the xvyin V3 test API. Collection isolation is enforced by application code, not this IAM role.",
+  "stage": "GA",
+  "includedPermissions": [
+    "datastore.databases.get",
+    "datastore.entities.get",
+    "datastore.entities.list",
+    "datastore.entities.create",
+    "datastore.entities.update",
+    "datastore.entities.delete",
+    "firebaseauth.users.get",
+    "firebaseauth.users.update"
+  ]
+}

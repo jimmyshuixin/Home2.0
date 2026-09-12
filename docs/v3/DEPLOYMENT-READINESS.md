@@ -1,14 +1,14 @@
 # test.xvyin.com 部署依赖与验收状态
 
-更新于 2026-09-12，Asia/Shanghai。本文件记录本轮只读代码审查与部署重试收到的证据，不是上线完成证明。**当前没有测试域成功响应、云代码部署 ID、活动内容 release 或真实管理员登录的完整远端验收记录，不能标记为生产就绪。** 用户已经要求发布当前版本到 `test.xvyin.com`，并明确使用 Workers Free；测试部署授权继续有效，无需重复询问相同偏好。
+更新于 2026-09-12 15:50，Asia/Shanghai。本文件记录代码审查与部署重试收到的证据，不是上线完成证明。此前网络授权阻塞和 Firebase 项目/管理员身份问题已解除，最新成功配置与真实 Google 验证见 [CLOUD-SETUP-2026-09-12.md](CLOUD-SETUP-2026-09-12.md)。**当前仍没有测试域成功响应、云代码部署 ID、活动内容 release 或真实管理员密码登录的完整远端验收记录，不能标记为生产就绪。** 用户已经要求发布当前版本到 `test.xvyin.com`，并明确使用 Workers Free；测试部署授权继续有效，无需重复询问相同偏好。
 
-## 本次重试的直接阻塞
+## 本次重试已解除的阻塞与当前步骤
 
-部署主任务最新观察为：Wrangler CLI 仍未完成 OAuth；浏览器自动化本轮恢复，但 `dash.cloudflare.com` 授权页返回 `ERR_CONNECTION_CLOSED`，本机 curl 与 Node 直连 Cloudflare dashboard/API 遇到 TLS `ECONNRESET`。当时 Windows `ProxyEnable=0`，此前使用的 `127.0.0.1:10808` 没有监听。这些现象证明本机当前路径无法完成该授权，不证明 Cloudflare 全网不可用，也不能仅凭错误码认定具体阻断原因。已请求用户恢复可用网络路径。
+用户恢复网络后，Wrangler `4.131.1` OAuth 与 `whoami` 已成功，专用 R2 bucket 和 Pages Direct Upload 项目已创建。用户已确认 `Home / home-60305`、`(default)` Standard/Native、`v3_test_`、管理员用户名及邮箱；实际 UID 已取得，Email/Password 已启用。独立服务账号八项权限角色及绑定已核实，私钥已受控保存；`2026-09-12T07:49:49Z` 的真实管理员查询和 Firestore create/read/update/query/delete 验证通过，临时探测记录已清理。
 
-用户已允许此次测试站的 Wrangler 授权，范围为账户/用户读取、Workers 与 Pages 部署、域名读取；没有授权购买 Paid。网络恢复后先完成既有 OAuth 流程并运行 `wrangler whoami` 确认账号与实际 scope，再继续必要的测试资源配置。未拿到成功结果前不能写“CLI 已授权”。不要通过关闭 TLS 校验、提交凭据或虚构登录结果跳过此依赖。
+当前下一步是上传已准备的三个必需 Secret，再部署测试 API Worker 与 Pages 网关，验证测试域 DNS、HTTPS、认证及真实内容链路。`GITHUB_TOKEN` 已成为可选自动派发配置；首次云端内容与媒体任务使用真实管理员受控执行器，自动派发仍待独立接入，不能复制本机 `gh` 的广范围 OAuth 凭据替代专用权限配置。详见 [最新云配置记录](CLOUD-SETUP-2026-09-12.md#首次部署的执行器与可选自动派发)。
 
-另有两项已经发出的真实配置问题仍待答：使用哪个 Firebase 项目/数据库承载隔离的 V3 数据，以及管理员用户名与恢复邮箱。无需在聊天中提供密码；密码应由用户在受保护的创建或恢复流程中设置。
+历史来源保留：此前重试曾在 `dash.cloudflare.com` 授权页遇到 `ERR_CONNECTION_CLOSED`，本机 curl/Node 直连 dashboard/API 遇到 TLS `ECONNRESET`；当时 `ProxyEnable=0`、`127.0.0.1:10808` 未监听。这些是用户恢复网络前的本机观察，不再是当前阻塞，也没有据此认定 Cloudflare 全网故障。此前 Firebase 项目与管理员信息待答状态同样已被本轮用户确认替代。
 
 ## 配置、资源与现有代码之间的缺口
 
@@ -16,15 +16,15 @@
 | --- | --- | --- |
 | 独立代码版本 | 实施分支 `codex/v3-production`；初始检出基线为 `685e73c653e6f6cc08bd4b7e30308bcb376421ab`，当前工作版本以 `git rev-parse HEAD` 与 `git status --short` 实时核对。 | 发布执行器的干净 checkout、Worker `BUILD_CODE_SHA`、候选任务与 GitHub 工作流 SHA 必须一致。旧基线哈希不能充当新代码部署版本，本地提交不等于远端部署。 |
 | 测试 Worker | `workers/api/wrangler.jsonc` 声明 `xvyin-v3-test-api`，`workers_dev:false`，`PUBLIC_ORIGIN=https://test.xvyin.com`。 | 在目标账户实际部署，保存真实版本/部署 ID。`/api/v1/health` 只证明处理器存活，不能代替数据库与认证检查。 |
-| 私有 R2 | 配置引用 `xvyin-v3-test-private`，但本轮未取得已创建并绑定的成功证据。 | 检查实际 R2 权限、创建/确认专用 bucket、完成 `CONTENT` 绑定；关闭公开 bucket 入口。以 API 上传和受控读取验证权限与隔离。 |
-| Pages 与子域 | `workers/gateway/wrangler.jsonc` 声明 `xvyin-v3-test`、`.gateway-output` 与 `API` 服务绑定。 | 构建管理端并运行 `prepare-gateway.ts`，部署网关，绑定并核验 `test.xvyin.com` 的 DNS、HTTPS 和服务绑定。不能以本地构建或域名配置已提交替代实际响应。 |
-| Firestore | 当前配置中的 `FIREBASE_PROJECT_ID`、`FIRESTORE_DATABASE_ID`、`FIRESTORE_EDITION` 仍为空；代码仅在明确 Standard 配置和有效凭据下选择 Firestore。 | 用户确定项目后配置真实值与权限。当前实现固定使用 `v3_test_` collection prefix；不可直接复用/覆盖旧 `guestbook` 或 `blog_comments`。 |
-| 管理员认证 | 普通账号密码提供方已经实现；`FIREBASE_AUTH_CONFIG` 无真实管理员配置。 | 确定用户名、恢复邮箱、唯一管理员 UID，启用 Email/Password，配置固定账号映射和 Firebase 自定义密码恢复 action URL，完成实际登录/登出/重置/会话撤销验收。 |
-| 后端 Secrets | 配置声明 `GOOGLE_SERVICE_ACCOUNT`、`FIREBASE_AUTH_CONFIG`、`PRIVACY_SALT`、`GITHUB_TOKEN`；本轮没有配置成功证据。 | 通过 Cloudflare Secret 写入实际值，不入 Git/静态输出/日志。服务账号具备 Firestore CRUD 与所需账号查询/更新权限；OAuth scope 本身不授予 IAM 权限。 |
+| 私有 R2 | 专用 `xvyin-v3-test-private` 已创建，`apac`、`Standard`。 | 完成 `CONTENT` 实际绑定及 API 上传/受控读取验收；保留私有入口，不以资源创建代替链路验证。 |
+| Pages 与子域 | Direct Upload 项目 `xvyin-v3-test` 已创建，生产分支 `codex/v3-production`；尚未页面部署。网关配置声明 `.gateway-output` 与 `API` 服务绑定。 | 构建管理端并运行 `prepare-gateway.ts`，部署网关，绑定并核验 `test.xvyin.com` 的 DNS、HTTPS 和服务绑定。不能以项目已创建替代实际响应。 |
+| Firestore | 已配置 `home-60305`、`(default)`、`standard`；实际服务账号的数据创建、读取、更新、查询及删除验证通过。 | 上传 Secret 后验证 Worker 运行中的真实访问。当前实现固定使用 `v3_test_` collection prefix；不可复用/覆盖旧 `guestbook` 或 `blog_comments`，也不能声称 IAM 已按集合前缀隔离。 |
+| 管理员认证 | 用户名/邮箱已确认、实际 UID 已取得、Email/Password 已启用、管理员权威查询已通过；私有 Auth Secret 文件已准备。 | 上传 Secret 后完成实际密码登录/登出/重置/会话撤销验收；自定义密码恢复 action URL 仍需按整个项目邮件模板范围处理。 |
+| 后端 Secrets | `GOOGLE_SERVICE_ACCOUNT`、`FIREBASE_AUTH_CONFIG`、`PRIVACY_SALT` 三个必需 Secret 已准备，尚未上传；`GITHUB_TOKEN` 为可选自动派发 Secret。 | 通过 Cloudflare Secret 写入实际值，不入 Git/静态输出/日志；保留本地身份验证与边缘实际运行的证据区别。 |
 | 自动构建与处理 | 两个 `workflow_dispatch` 文件及 OIDC/dispatcher 代码在本地。 | 完成 GitHub 工作流登记、目标分支推送、限仓库的 Actions 派发权限与真实 OIDC 验证。后台排队成功不等于工作流开始，更不等于发布。 |
 | 首批真实内容 | 私有迁移清单已生成，部分候选因媒体映射、真实日期或旧内容转换范围而阻塞。 | 经正常媒体库上传、处理和实际 assetId 映射，审阅后保存并发布。先建立一份真实活动 release；不使用 fixture seed 代替原内容。 |
 
-同级工作区的 `FIREBASE-BASELINE.md` 记录 2026-09-12 控制台只读观察：`Home / home-60305` 为 Spark，Firestore `(default)` 为 Standard/Native、`asia-east2`，当时仅启用 Anonymous 登录，定期备份未启用。这些是候选项目的已观察基线，不是用户已选定它、V3 已获权限或旧 firebase-proxy 的实际 Secret 已核实。选择和配置后必须用 V3 的实际身份验证。
+同级工作区的 `FIREBASE-BASELINE.md` 保留配置前的只读历史：`Home / home-60305` 为 Spark，Firestore `(default)` 为 Standard/Native、`asia-east2`，当时仅启用 Anonymous 登录，定期备份未启用。之后的项目选择、Email/Password、V3 IAM 及实际身份验证成功由 [本轮配置记录](CLOUD-SETUP-2026-09-12.md) 补充；这些新增证据仍不代表旧 firebase-proxy 的实际 Secret 已核实，也不代表备份已经配置。
 
 ## GitHub 自动派发的具体前提
 
