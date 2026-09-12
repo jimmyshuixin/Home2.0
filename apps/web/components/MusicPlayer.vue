@@ -5,12 +5,14 @@ const music = useMusic()
 const { playlists, playlistId, tracks, track, source, index, playing, duration, position, volume, loading, error, repeat, lyrics, lyricsLoading, lyricsError } = music
 const playlistOpen = ref(false), lyricsOpen = ref(false)
 const cover = computed(() => safeUrl(track.value?.coverUrl) || assetVariant(track.value?.coverAssetId, 'thumb')?.url)
+const coverFailed = ref(false)
+watch(cover, () => { coverFailed.value = false })
 const lyricLines = computed(() => parseLyrics(lyrics.value))
 const activeLyric = computed(() => { let result = -1; lyricLines.value.forEach((line, i) => { if (line.time >= 0 && line.time <= position.value) result = i }); return result })
 watch([lyricsOpen, () => track.value?.id, () => track.value?.lyricsUrl], () => { if (lyricsOpen.value) void music.loadLyrics() })
 </script>
 <template><section class="panel music-panel" aria-labelledby="music-title"><div class="panel-head"><h3 id="music-title">我的音乐</h3><div><button class="quiet" @click="playlistOpen = true">歌单</button><button class="quiet" @click="lyricsOpen = true">歌词</button></div></div>
-  <div class="track"><img v-if="cover" :src="cover" class="track-cover" alt="" width="76" height="76" loading="lazy"><span v-else class="disc" aria-hidden="true"><SiteIcon name="music" :size="30" /></span><div><h4>{{ track?.title || '选择一首，慢慢听。' }}</h4><p>{{ track?.artist || (loading ? '正在加载歌单' : '未选择曲目') }}</p></div></div>
+  <div class="track"><img v-if="cover && !coverFailed" :src="cover" class="track-cover" alt="" width="76" height="76" loading="lazy" referrerpolicy="no-referrer" @error="coverFailed = true"><span v-else class="disc" aria-hidden="true"><SiteIcon name="music" :size="30" /></span><div><h4>{{ track?.title || '选择一首，慢慢听。' }}</h4><p>{{ track?.artist || (loading ? '正在加载歌单' : '未选择曲目') }}</p></div></div>
   <input class="progress" type="range" min="0" :max="Number.isFinite(duration) ? duration : 0" :value="position" :disabled="!Number.isFinite(duration)" aria-label="播放进度" @input="music.seek(Number(($event.target as HTMLInputElement).value))">
   <div class="times"><span>{{ displayTime(position) }}</span><span>{{ displayTime(duration) }}</span></div>
   <div class="controls"><button class="icon-button" aria-label="单曲循环" :aria-pressed="repeat" @click="repeat = !repeat"><SiteIcon name="repeat" /></button><button class="icon-button" aria-label="上一首" :disabled="tracks.length < 2" @click="music.previous"><SiteIcon name="previous" /></button><button class="play-button primary" :aria-label="playing ? '暂停音乐' : '播放音乐'" :disabled="!source" @click="music.toggle"><SiteIcon :name="playing ? 'pause' : 'play'" /></button><button class="icon-button" aria-label="下一首" :disabled="tracks.length < 2" @click="music.next"><SiteIcon name="next" /></button><label class="volume-desktop"><SiteIcon name="volume" /><input type="range" class="volume" min="0" max="1" step=".05" :value="volume" aria-label="音乐音量" @input="music.setVolume(Number(($event.target as HTMLInputElement).value))"></label></div>

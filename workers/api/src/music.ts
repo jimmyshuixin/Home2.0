@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { IdSchema } from '@xvyin/contracts';
-import { assert } from './errors';
+import { assert, ApiError } from './errors';
 import { readBoundedJson } from './store/google-oauth';
 import type { Snapshot } from './releases';
 const musicId = z.string().regex(/^[A-Za-z0-9_.:-]{1,160}$/u);
@@ -21,7 +21,8 @@ export function createMusicHandler(origin: string, fetcher: typeof fetch = globa
     const response = await fetcher(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15000), redirect: 'manual' });
     if (!response.ok) await response.body?.cancel();
     assert(response.ok, 'MUSIC_UNAVAILABLE', 503, '音乐平台暂时不可用，可选择站内歌单');
-    return readBoundedJson(response, 2 * 1024 * 1024);
+    try { return await readBoundedJson(response, 2 * 1024 * 1024); }
+    catch { throw new ApiError('MUSIC_UNAVAILABLE', 503, '音乐平台暂时无法提供播放信息，可选择站内歌单'); }
   }
   return async (request: Request, snapshot: Snapshot, requestId: string): Promise<Response> => {
     assert(request.method === 'GET' || request.method === 'HEAD', 'METHOD_NOT_ALLOWED', 405, '音乐接口只接受读取');

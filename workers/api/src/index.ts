@@ -20,7 +20,7 @@ export default {
     const getGoogleAccessToken = validCredential ? createGoogleAccessTokenProvider(serviceAccount, { scopes: [GOOGLE_OAUTH_SCOPES.datastore, GOOGLE_OAUTH_SCOPES.identityToolkit], completedTokenCache: completedGoogleTokens }) : async () => { throw new StoreError('STORE_NOT_CONFIGURED'); };
     let store: Store = new UnconfiguredStore();
     if (validCredential && String(env.FIRESTORE_EDITION) === 'standard') {
-      try { store = new FirestoreStore({ projectId: env.FIREBASE_PROJECT_ID, databaseId: env.FIRESTORE_DATABASE_ID, edition: 'standard', collectionPrefix: 'v3_test_' }, { getAccessToken: getGoogleAccessToken, maxAttempts: 1 }); }
+      try { store = new FirestoreStore({ projectId: env.FIREBASE_PROJECT_ID, databaseId: env.FIRESTORE_DATABASE_ID, edition: 'standard', collectionPrefix: 'v3_test_' }, { getAccessToken: getGoogleAccessToken, maxAttempts: 2 }); }
       catch { /* Private APIs fail closed; a Firebase misconfiguration must not stop published R2 reads. */ }
     }
     const githubToken = env.GITHUB_TOKEN;
