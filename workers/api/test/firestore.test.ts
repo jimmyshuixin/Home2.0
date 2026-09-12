@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FirestoreStore, type FirestoreConfig } from '../src/store/firestore';
 import { UnconfiguredStore } from '../src/store/unconfigured';
 
@@ -11,8 +11,33 @@ function doc(id: string, value: unknown) {
 function body(init?: RequestInit): Record<string, unknown> { return JSON.parse(String(init?.body)) as Record<string, unknown>; }
 function operation(url: RequestInfo | URL): string { return String(url).split(':').at(-1)!; }
 const access = async () => 'fake-test-token';
+beforeEach(() => { vi.spyOn(console, 'error').mockImplementation(() => {}); });
+afterEach(() => { vi.restoreAllMocks(); });
 
 describe('Firestore REST protocol without remote access', () => {
+  it('logs fixed operation and HTTP status without provider body, record name or bearer token', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ error: { message: 'private-provider-error' } }, { status: 403 }));
+    const store = new FirestoreStore(config, { getAccessToken: access, fetch: fetcher });
+    await expect(store.get('entries/private-record')).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
+    expect(JSON.parse(String(vi.mocked(console.error).mock.calls[0]?.[0]))).toEqual({ level: 'error', code: 'FIRESTORE_REQUEST_FAILED', operation: 'batchGet', stage: 'response_status', status: 403, exceptionName: 'UnknownError' });
+    const logs = JSON.stringify(vi.mocked(console.error).mock.calls);
+    for (const value of ['private-provider-error', 'private-record', 'fake-test-token', config.projectId]) expect(logs).not.toContain(value);
+  });
+
+  it('distinguishes access-token and transport failures without forwarding exception detail', async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const failure = new TypeError('private-transport-detail');
+    const store = new FirestoreStore(config, { getAccessToken: async () => { throw failure; }, fetch: fetcher });
+    await expect(store.get('entries/private-record')).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(JSON.parse(String(vi.mocked(console.error).mock.calls[0]?.[0]))).toMatchObject({ operation: 'batchGet', stage: 'access_token', status: null, exceptionName: 'TypeError' });
+    failure.name = 'secret-untrusted-name'; fetcher.mockRejectedValueOnce(failure);
+    await expect(new FirestoreStore(config, { getAccessToken: access, fetch: fetcher }).get('entries/private-record')).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
+    expect(JSON.parse(String(vi.mocked(console.error).mock.calls[1]?.[0]))).toEqual({ level: 'error', code: 'FIRESTORE_REQUEST_FAILED', operation: 'batchGet', stage: 'fetch', status: null, exceptionName: 'UnknownError' });
+    const logs = JSON.stringify(vi.mocked(console.error).mock.calls);
+    for (const value of [failure.message, failure.name, 'private-record', 'fake-test-token']) expect(logs).not.toContain(value);
+  });
+
   it('uses one batchGet for 100 keys and reorders shuffled provider results with missing and duplicate slots', async () => {
     const keys = [...Array.from({ length: 98 }, (_, index) => `entries/a${index}`), 'entries/missing', 'entries/a0'];
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {

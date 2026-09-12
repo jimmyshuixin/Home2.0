@@ -1,6 +1,6 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { exportPKCS8, generateKeyPair, jwtVerify } from 'jose';
-import { createGoogleAccessTokenProvider, GOOGLE_OAUTH_SCOPES, type GoogleServiceAccountConfig } from '../src/store/google-oauth';
+import { createGoogleAccessTokenProvider, GOOGLE_OAUTH_SCOPES, safeStoreExceptionName, type GoogleServiceAccountConfig } from '../src/store/google-oauth';
 
 let config: GoogleServiceAccountConfig;
 let publicKey: CryptoKey;
@@ -10,8 +10,44 @@ beforeAll(async () => {
   publicKey = pair.publicKey;
   config = { projectId: 'xvyin-contract-test', clientEmail: 'contract-test@xvyin-contract-test.iam.gserviceaccount.com', privateKey: await exportPKCS8(pair.privateKey) };
 });
+beforeEach(() => { vi.spyOn(console, 'error').mockImplementation(() => {}); });
+afterEach(() => { vi.restoreAllMocks(); });
 
 describe('request-scoped service-account OAuth', () => {
+  it('classifies pre-network key import failures without logging key, message or stack', async () => {
+    vi.spyOn(crypto.subtle, 'importKey').mockRejectedValueOnce(new DOMException('private-key-and-provider-detail', 'DataError'));
+    const fetcher = vi.fn<typeof fetch>();
+    await expect(createGoogleAccessTokenProvider(config, { fetch: fetcher })()).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(JSON.parse(String(vi.mocked(console.error).mock.calls[0]?.[0]))).toEqual({ level: 'error', code: 'GOOGLE_OAUTH_FAILED', stage: 'key_import', status: null, exceptionName: 'DataError' });
+    const logs = JSON.stringify(vi.mocked(console.error).mock.calls);
+    expect(logs).not.toContain('private-key-and-provider-detail');
+    expect(logs).not.toContain(config.privateKey); expect(logs).not.toContain(config.clientEmail);
+  });
+
+  it('separates signing and fetch failures while rejecting arbitrary exception names', async () => {
+    const signer = vi.spyOn(crypto.subtle, 'sign').mockRejectedValueOnce(new TypeError('signing-private-detail'));
+    const fetcher = vi.fn<typeof fetch>();
+    await expect(createGoogleAccessTokenProvider(config, { fetch: fetcher })()).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(JSON.parse(String(vi.mocked(console.error).mock.calls[0]?.[0]))).toMatchObject({ stage: 'jwt_sign', status: null, exceptionName: 'TypeError' });
+    signer.mockRestore();
+    const failure = new Error('oauth-token-private-detail'); failure.name = 'secret-in-untrusted-name';
+    fetcher.mockRejectedValueOnce(failure);
+    await expect(createGoogleAccessTokenProvider(config, { fetch: fetcher })()).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
+    expect(JSON.parse(String(vi.mocked(console.error).mock.calls[1]?.[0]))).toEqual({ level: 'error', code: 'GOOGLE_OAUTH_FAILED', stage: 'token_fetch', status: null, exceptionName: 'UnknownError' });
+    const logs = JSON.stringify(vi.mocked(console.error).mock.calls);
+    for (const value of ['signing-private-detail', 'oauth-token-private-detail', failure.name, config.clientEmail, config.privateKey]) expect(logs).not.toContain(value);
+    expect(safeStoreExceptionName({ name: 'TypeError', message: 'private' })).toBe('UnknownError');
+  });
+
+  it('reports only token HTTP status and fixed validation phase for a provider rejection', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ error: 'private-provider-rejection' }, { status: 403 }));
+    await expect(createGoogleAccessTokenProvider(config, { fetch: fetcher })()).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
+    expect(JSON.parse(String(vi.mocked(console.error).mock.calls[0]?.[0]))).toEqual({ level: 'error', code: 'GOOGLE_OAUTH_FAILED', stage: 'token_validation', status: 403, exceptionName: 'UnknownError' });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain('private-provider-rejection');
+  });
+
   it('signs RS256 with a fixed audience and only explicitly selected scopes', async () => {
     let assertion = '';
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {

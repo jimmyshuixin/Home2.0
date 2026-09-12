@@ -1,4 +1,4 @@
-import { readBoundedJson } from './google-oauth';
+import { readBoundedJson, safeStoreExceptionName } from './google-oauth';
 import { BufferedTransaction, deserializeJson, listOptions, makeCursor, MAX_STORED_JSON_BYTES, StoreError, validateKey, validateKeys, type Store, type Transaction } from './types';
 
 const FIRESTORE_ORIGIN = 'https://firestore.googleapis.com';
@@ -52,22 +52,30 @@ export class FirestoreStore implements Store {
   async #request(operation: 'beginTransaction' | 'batchGet' | 'commit' | 'rollback' | 'runQuery', body: unknown, maxBytes = MAX_RESPONSE_BYTES): Promise<unknown> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
+    let stage: 'access_token' | 'request_body' | 'fetch' | 'response_body' | 'response_status' = 'access_token';
+    let status: number | null = null;
     try {
       const token = await this.#getAccessToken();
       if (typeof token !== 'string' || !token || token.length > 16_384 || /\s/u.test(token)) throw new StoreError('STORE_NOT_CONFIGURED');
+      stage = 'request_body';
       const serialized = JSON.stringify(body);
       if (new TextEncoder().encode(serialized).byteLength > MAX_REQUEST_BYTES) throw new StoreError('STORE_INVALID_VALUE');
+      stage = 'fetch';
       const response = await this.#fetch(`${FIRESTORE_ORIGIN}/v1/${this.#documents}:${operation}`, {
         method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
         body: serialized, signal: controller.signal, redirect: 'error', cache: 'no-store',
       });
+      status = response.status;
+      stage = 'response_body';
       const result = await readBoundedJson(response, maxBytes);
+      stage = 'response_status';
       if (!response.ok) {
         if (response.status === 409 && isObject(result) && isObject(result.error) && result.error.status === 'ABORTED') throw new TransactionAborted();
         throw new StoreError(response.status === 409 ? 'STORE_CONFLICT' : 'STORE_UNAVAILABLE');
       }
       return result;
     } catch (error) {
+      console.error(JSON.stringify({ level: 'error', code: 'FIRESTORE_REQUEST_FAILED', operation, stage, status, exceptionName: safeStoreExceptionName(error) }));
       if (error instanceof StoreError) throw error;
       throw new StoreError('STORE_UNAVAILABLE');
     } finally { clearTimeout(timer); }

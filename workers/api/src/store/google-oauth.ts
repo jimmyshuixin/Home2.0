@@ -16,6 +16,14 @@ export interface GoogleOAuthOptions {
   now?: () => number;
   timeoutMs?: number;
 }
+const SAFE_EXCEPTION_NAMES = new Set(['Error', 'TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'URIError', 'EvalError', 'AggregateError', 'AbortError', 'TimeoutError', 'DataError', 'NotSupportedError', 'OperationError', 'InvalidAccessError', 'InvalidStateError', 'InvalidCharacterError', 'SecurityError']);
+/** Only fixed platform exception names may enter diagnostics; never messages or arbitrary names. */
+export function safeStoreExceptionName(error: unknown): string {
+  try {
+    const name = error instanceof Error ? error.name : '';
+    return SAFE_EXCEPTION_NAMES.has(name) ? name : 'UnknownError';
+  } catch { return 'UnknownError'; }
+}
 
 export function validServiceAccountConfig(config: GoogleServiceAccountConfig): boolean {
   return Boolean(config && /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u.test(config.projectId)
@@ -75,19 +83,27 @@ export function createGoogleAccessTokenProvider(config: GoogleServiceAccountConf
     const issuedAt = nowSeconds();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let stage: 'key_import' | 'jwt_sign' | 'token_fetch' | 'token_response' | 'token_validation' = 'key_import';
+    let status: number | null = null;
     try {
       signingKey ??= importPKCS8(credential.privateKey, 'RS256');
+      const key = await signingKey;
+      stage = 'jwt_sign';
       const assertion = await new SignJWT({ scope: scopes.join(' ') })
         .setProtectedHeader({ alg: 'RS256', typ: 'JWT' })
         .setIssuer(credential.clientEmail).setAudience(TOKEN_URL)
         .setIssuedAt(issuedAt).setExpirationTime(issuedAt + 3600)
-        .sign(await signingKey);
+        .sign(key);
       const body = new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion });
+      stage = 'token_fetch';
       const response = await fetcher(TOKEN_URL, {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
         body: body.toString(), redirect: 'error', cache: 'no-store', signal: controller.signal,
       });
+      status = response.status;
+      stage = 'token_response';
       const result = await readBoundedJson(response, 64 * 1024);
+      stage = 'token_validation';
       if (!response.ok || !result || typeof result !== 'object' || Array.isArray(result)) throw new StoreError('STORE_UNAVAILABLE');
       const data = result as Record<string, unknown>;
       if (typeof data.access_token !== 'string' || !data.access_token || data.access_token.length > 16_384 || /\s/u.test(data.access_token)
@@ -96,7 +112,10 @@ export function createGoogleAccessTokenProvider(config: GoogleServiceAccountConf
       }
       cached = { token: data.access_token, expiresAt: issuedAt + data.expires_in };
       return cached.token;
-    } catch { throw new StoreError('STORE_UNAVAILABLE'); }
+    } catch (error) {
+      console.error(JSON.stringify({ level: 'error', code: 'GOOGLE_OAUTH_FAILED', stage, status, exceptionName: safeStoreExceptionName(error) }));
+      throw new StoreError('STORE_UNAVAILABLE');
+    }
     finally { clearTimeout(timer); }
   }
 

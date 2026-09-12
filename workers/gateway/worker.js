@@ -3,11 +3,12 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
-      const path = url.pathname.startsWith('/admin/assets/') || url.pathname.startsWith('/admin/fonts/') ? url.pathname : '/admin/index.html';
+      const isStaticAsset = url.pathname.startsWith('/admin/assets/') || url.pathname.startsWith('/admin/fonts/');
+      const path = isStaticAsset ? url.pathname : '/admin/';
       const target = new URL(path, url.origin);
       const response = await env.ASSETS.fetch(new Request(target, request));
       const headers = new Headers(response.headers);
-      headers.set('cache-control', path.endsWith('.html') ? 'private, no-store' : 'public, max-age=31536000, immutable');
+      headers.set('cache-control', isStaticAsset ? 'public, max-age=31536000, immutable' : 'private, no-store');
       headers.set('x-robots-tag', 'noindex, nofollow'); headers.set('x-content-type-options', 'nosniff');
       headers.set('referrer-policy', 'no-referrer'); headers.set('x-frame-options', 'DENY');
       headers.set('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
