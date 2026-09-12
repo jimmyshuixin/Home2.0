@@ -175,9 +175,13 @@ export class Processing {
     if (task.state === 'complete') return this.publicVariant(task);
     let head = await this.bucket.head(task.key);
     if (!head) {
-      try { head = await this.bucket.resumeMultipartUpload(task.key, task.r2UploadId!).complete(task.parts.map(({ partNumber, etag }) => ({ partNumber, etag }))); }
+      // The live R2 completion response can omit custom metadata. Verify a fresh
+      // HEAD of the persisted object, including when the completion reply is lost.
+      try { await this.bucket.resumeMultipartUpload(task.key, task.r2UploadId!).complete(task.parts.map(({ partNumber, etag }) => ({ partNumber, etag }))); }
       catch (error) { head = await this.bucket.head(task.key); if (!head) throw error; }
+      head ||= await this.bucket.head(task.key);
     }
+    assert(head, 'VARIANT_STATE_CONFLICT', 409, '合并后的衍生对象尚不可读取，请重试');
     assert(head.size === task.bytes && head.customMetadata?.sha256 === task.sha256, 'VARIANT_SIZE_MISMATCH', 422, '合并后的衍生对象与计划不一致');
     assert(head.etag === task.multipartEtag && head.customMetadata?.assetId === assetId && head.customMetadata?.runId === runId && head.customMetadata?.role === role, 'VARIANT_ETAG_MISMATCH', 409, 'R2 对象未按已验证分片顺序完成');
     // Workers Free must not re-read/hash a complete 512 MB object here. Every

@@ -116,6 +116,30 @@ describe('private processing state machine with real R2 multipart', () => {
     await bucket.put(task.key, bytes, { customMetadata: { sha256: task.sha256 } });
     await expect(processing.finish(asset.id, run)).rejects.toMatchObject({ code: 'VARIANT_STATE_CONFLICT' });
   });
+  it('verifies persisted metadata when the real completion reply omits it', async () => {
+    const { asset, metadata } = await seed(), { variants, bytes } = await imagePlan();
+    await processing.claim(asset.id, run); await processing.plan(asset.id, run, { metadata, variants });
+    let strippedReplies = 0;
+    const liveLike = new Proxy(bucket, { get(target, property) {
+      if (property === 'resumeMultipartUpload') return (key: string, uploadId: string) => {
+        const upload = target.resumeMultipartUpload(key, uploadId);
+        return new Proxy(upload, { get(original, field) {
+          if (field === 'complete') return async (parts: R2UploadedPart[]) => {
+            const object = await original.complete(parts); strippedReplies++;
+            return { ...object, customMetadata: undefined };
+          };
+          const value = Reflect.get(original, field); return typeof value === 'function' ? value.bind(original) : value;
+        } });
+      };
+      const value = Reflect.get(target, property); return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    const liveProcessing = new Processing(store, liveLike, () => instant);
+    for (const variant of variants) {
+      await liveProcessing.part(asset.id, run, variant.role, 1, partRequest(bytes));
+      expect((await liveProcessing.completeVariant(asset.id, run, variant.role)).state).toBe('complete');
+    }
+    expect(strippedReplies).toBe(3); expect((await liveProcessing.finish(asset.id, run)).status).toBe('ready');
+  });
   it('checks active request leases before accepting another body', async () => {
     const { asset, metadata } = await seed(), { variants, bytes } = await imagePlan(); await processing.claim(asset.id, run); await processing.plan(asset.id, run, { metadata, variants });
     await store.transaction(async tx => { const job = (await tx.get<ProcessingJob>(`processing/${asset.id}`))!; tx.put(`processing/${asset.id}`, { ...job, variants: job.variants.map(task => task.role === 'large' ? task : { ...task, leases: { 1: { token: crypto.randomUUID(), expiresAt: instant + 10000 } } }) }); });
