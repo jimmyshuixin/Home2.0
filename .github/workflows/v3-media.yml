@@ -1,0 +1,66 @@
+name: Process V3 private media
+
+on:
+  workflow_dispatch:
+    inputs:
+      asset_id:
+        description: Uploaded V3 media ID
+        required: true
+        type: string
+      api_origin:
+        description: Approved site API origin
+        required: true
+        type: choice
+        default: https://test.xvyin.com
+        options:
+          - https://test.xvyin.com
+          - https://xvyin.com
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v3-media-${{ inputs.api_origin }}-${{ inputs.asset_id }}
+  cancel-in-progress: false
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out the authenticated workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up the verified Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
+
+      - name: Install system media decoders
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes ffmpeg
+          ffmpeg -version
+          ffprobe -version
+
+      - name: Install locked project dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Validate media processor and R2 boundaries
+        run: |
+          npm run typecheck
+          npx vitest run scripts/v3/test/process-media.test.ts workers/api/test/processing.test.ts scripts/v3/test/media-runner.test.ts
+
+      - name: Process and verify private media using GitHub OIDC
+        env:
+          MEDIA_ASSET_ID: ${{ inputs.asset_id }}
+          MEDIA_API_ORIGIN: ${{ inputs.api_origin }}
+        run: node --import tsx scripts/v3/media-runner.ts --asset "$MEDIA_ASSET_ID" --origin "$MEDIA_API_ORIGIN"
+
+      # Private originals, local reports, and processed bytes are never uploaded
+      # as GitHub artifacts. The ephemeral runner is discarded after this job.

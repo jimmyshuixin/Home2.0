@@ -1,0 +1,63 @@
+name: V3 private content candidate
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Backend content release job UUID
+        required: true
+        type: string
+      api_origin:
+        description: Approved API origin
+        required: true
+        default: https://test.xvyin.com
+        type: choice
+        options:
+          - https://test.xvyin.com
+          - https://xvyin.com
+      code_sha:
+        description: Exact 40-character code commit required by the release job
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: v3-content-${{ inputs.job_id }}
+  cancel-in-progress: false
+jobs:
+  build-candidate:
+    if: github.repository == 'jimmyshuixin/Home2.0' && github.ref == 'refs/heads/codex/v3-production'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      XVYIN_JOB_ID: ${{ inputs.job_id }}
+      XVYIN_API_ORIGIN: ${{ inputs.api_origin }}
+      XVYIN_CODE_SHA: ${{ inputs.code_sha }}
+      NUXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Validate trusted workflow inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$XVYIN_JOB_ID" =~ ^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$ ]] || exit 1
+          [[ "$XVYIN_CODE_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$XVYIN_CODE_SHA" == "$GITHUB_SHA" ]] || { echo 'The queued code version differs from this workflow commit. Refresh the deployed code version before building.'; exit 1; }
+          [[ "$XVYIN_API_ORIGIN" == 'https://test.xvyin.com' || "$XVYIN_API_ORIGIN" == 'https://xvyin.com' ]] || exit 1
+      # Official immutable tag commits verified on 2026-09-12.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.code_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.2'
+          package-manager-cache: false
+      - name: Install exact dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify private candidate and upload immutable files
+        shell: bash
+        run: node --import tsx scripts/v3/publish.ts --job "$XVYIN_JOB_ID" --origin "$XVYIN_API_ORIGIN"
+      # No artifact/cache upload: snapshots, rendered candidates and build logs are private.
+      # Activation belongs exclusively to the authenticated administrator preview flow.
