@@ -47,7 +47,7 @@ export function mediaPreview(item: MediaItem): string | undefined {
   const variant = item.variants.find(value => ['thumb', 'content'].includes(value.role)) ?? item.variants[0];
   return variant ? `/api/v1/admin/media/${encodeURIComponent(item.id)}/${encodeURIComponent(variant.role)}` : undefined;
 }
-export interface ReleaseJob { id: string; status: string; previewUrl?: string; error?: { code?: string; message?: string }; errorCode?: string; createdAt?: string; releaseId?: string; previousReleaseId?: string | null; changes?: { collection: string; id: string; version: number; action: string }[] }
+export interface ReleaseJob { id: string; status: string; previewUrl?: string; error?: { code?: string; message?: string }; errorCode?: string; createdAt?: string; releaseId?: string; previousReleaseId?: string | null; changes?: { collection: string; id: string; version: number; action: string }[]; reconciledRecords?: number; reconciliationPending?: boolean; dispatchState?: 'unconfirmed' | 'confirmed' }
 export function formatBytes(bytes: number): string { if (!Number.isFinite(bytes)) return '—'; return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.ceil(bytes / 1e3)} KB`; }
 export function dateTime(value?: string): string { if (!value) return '尚未记录'; const date = new Date(value); return Number.isNaN(date.getTime()) ? '日期无效' : new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'medium', timeStyle: 'short', hour12: false }).format(date); }
 export function visibilityLabel(value: string): string { return ({ draft: '草稿', published: '已发布', hidden: '已隐藏', pending: '待审核', approved: '已通过', rejected: '已拒绝' } as Record<string, string>)[value] ?? value; }

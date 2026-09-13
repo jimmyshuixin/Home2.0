@@ -15,6 +15,12 @@ export interface Snapshot {
 export const ReleaseChangeSchema = z.object({ collection: z.enum(['creations', 'albums', 'fitness', 'playlists', 'settings']), id: IdSchema, version: z.number().int().positive(), action: z.enum(['publish', 'hide']) }).strict();
 export const ReleaseInputSchema = z.object({ changes: z.array(ReleaseChangeSchema).min(1).max(50), expectedReleaseId: IdSchema.nullable() }).strict();
 export type ReleaseChange = z.infer<typeof ReleaseChangeSchema>;
+export interface ReleaseCandidate {
+  collection: ReleaseChange['collection']; id: string; title: string; version: number;
+  draftRevisionId: string; publishedRevisionId: string | null;
+  changeKind: 'new' | 'modified' | 'hidden' | 'unchanged';
+  actions: Array<ReleaseChange['action']>; updatedAt: string;
+}
 export interface ActiveRelease { releaseId: string; manifestSha256: string; activatedAt: string; schemaVersion: 1; codeSha: string; runId: string }
 export interface BuildFile { path: string; key: string; sha256: string; bytes: number; contentType: string }
 export interface ReleaseManifest { releaseId: string; schemaVersion: 1; files: BuildFile[]; assets: Record<string, { key: string; mime: string; bytes: number; sha256: string }> }
@@ -35,7 +41,11 @@ export interface ReleaseJob {
   verifiedIndexCount?: number;
   indexCount?: number;
   reconciledRecords?: number;
+  /** The public pointer already switched; bounded metadata synchronization is still in progress. */
+  reconciliationPending?: boolean;
+  dispatchState?: 'confirmed' | 'unconfirmed';
 }
+interface ReleaseRequest { inputSha256: string; jobId: string; createdAt: string }
 export const BuildManifestInputSchema = z.object({ files: z.array(z.object({
   path: z.string().regex(/^\/[A-Za-z0-9_\-./%]+$/u).max(500).refine(v => !v.includes('..') && !v.includes('//') && !/%(?:2f|5c|2e|00)/iu.test(v)),
   sha256: Sha256Schema, bytes: z.number().int().positive().max(25 * 1024 * 1024),
@@ -85,12 +95,69 @@ export class Releases {
     assert(object && object.size <= 4 * 1024 * 1024, 'RELEASE_NOT_FOUND', 404, '发布清单不存在');
     return object.json<ReleaseManifest>();
   }
-  async create(input: unknown, uid: string): Promise<ReleaseJob> {
-    const { changes, expectedReleaseId } = ReleaseInputSchema.parse(input), active = await this.active();
+  /** One collection page per request, always compared with the actual public pointer, never a preview cookie. */
+  async changesPage(collection: ReleaseChange['collection'], cursor?: string, expectedReleaseId?: string | null): Promise<{ items: ReleaseCandidate[]; nextCursor: string | null; activeReleaseId: string | null }> {
+    const active = await this.active(), activeReleaseId = active?.value.releaseId || null;
+    assert(expectedReleaseId === undefined || expectedReleaseId === activeReleaseId, 'RELEASE_CONFLICT', 409, '公开版本已改变，请重新读取完整发布清单');
+    const snapshot = active ? await this.snapshot(active.value.releaseId) : emptySnapshot('unpublished');
+    let values: DraftRecord[], nextCursor: string | null = null;
+    if (collection === 'settings') {
+      assert(!cursor, 'INVALID_CURSOR', 422, '设置清单没有下一页');
+      values = (await this.store.getMany<DraftRecord>(['settings/site', 'settings/fitness'])).filter((record): record is DraftRecord => Boolean(record && record.version > 0));
+    } else {
+      const page = await this.store.list<DraftRecord>(collection, { limit: 50, cursor });
+      values = page.items.map(item => item.data); nextCursor = page.nextCursor;
+    }
+    const live = collection === 'creations' ? snapshot.creations : collection === 'albums' ? snapshot.albums : collection === 'fitness' ? snapshot.fitness.entries : collection === 'playlists' ? snapshot.playlists : [];
+    const publishedById = new Map(live.map(item => [item.id, item]));
+    // Activation is atomic, while record flags synchronize ten at a time. An
+    // explicit hide in the active candidate must never be mistaken for a new draft.
+    const unresolved = collection !== 'settings' && active && values.some(record => !publishedById.has(record.id) && !record.lastPublishedRevisionId && record.visibility === 'draft');
+    const activeJob = unresolved ? await this.store.get<ReleaseJob>(`releases/${active!.value.releaseId}`) : null;
+    const explicitlyHidden = new Set(activeJob?.changes.filter(change => change.collection === collection && change.action === 'hide').map(change => change.id));
+    const items = values.map((record): ReleaseCandidate => {
+      const published = publishedById.get(record.id), draft = record.draft as Record<string, unknown>;
+      let changeKind: ReleaseCandidate['changeKind'];
+      if (collection === 'settings') {
+        const schema = record.id === 'site' ? SiteSettingsSchema : FitnessSettingsDraftSchema;
+        const publicSettings = record.id === 'site' ? snapshot.settings : snapshot.fitness.settings;
+        changeKind = !active ? 'new' : JSON.stringify(schema.parse(record.draft)) === JSON.stringify(schema.parse(publicSettings)) ? 'unchanged' : 'modified';
+      } else changeKind = published ? record.draftRevisionId === published.revisionId ? 'unchanged' : 'modified' : record.lastPublishedRevisionId || record.visibility === 'hidden' || explicitlyHidden.has(record.id) ? 'hidden' : 'new';
+      return {
+        collection, id: record.id, title: collection === 'settings' ? record.id === 'site' ? '网站设置' : '健身设置' : typeof draft.title === 'string' && draft.title ? draft.title : typeof draft.name === 'string' && draft.name ? draft.name : '未命名草稿',
+        version: record.version, draftRevisionId: record.draftRevisionId,
+        // Settings snapshots do not store revision IDs; content equality above is authoritative for them.
+        publishedRevisionId: published?.revisionId || null, changeKind,
+        actions: published ? ['publish', 'hide'] : ['publish'], updatedAt: record.updatedAt,
+      };
+    });
+    assert(((await this.active())?.value.releaseId || null) === activeReleaseId, 'RELEASE_CONFLICT', 409, '公开版本已改变，请重新读取完整发布清单');
+    return { items, nextCursor, activeReleaseId };
+  }
+  async create(input: unknown, uid: string, idempotencyKey?: string): Promise<ReleaseJob> {
+    const { changes, expectedReleaseId } = ReleaseInputSchema.parse(input);
+    let id = crypto.randomUUID() as string, at = new Date(this.now()).toISOString();
+    if (idempotencyKey !== undefined) {
+      z.string().uuid().parse(idempotencyKey);
+      changes.sort((a, b) => `${a.collection}/${a.id}`.localeCompare(`${b.collection}/${b.id}`));
+      const requestId = await sha256(`release:${uid}:${idempotencyKey}`);
+      const inputSha256 = await sha256(JSON.stringify({ changes, expectedReleaseId }));
+      const request = await this.store.transaction(async tx => {
+        const existing = await tx.get<ReleaseRequest>(`release_requests/${requestId}`);
+        assert(!existing || existing.inputSha256 === inputSha256, 'IDEMPOTENCY_CONFLICT', 409, '这次发布请求的内容已改变，请重新确认发布清单');
+        const receipt: ReleaseRequest = existing || { inputSha256, jobId: id, createdAt: at };
+        const job = await tx.get<ReleaseJob>(`releases/${receipt.jobId}`);
+        if (!existing) tx.put(`release_requests/${requestId}`, receipt);
+        return { receipt, job };
+      });
+      if (request.job) return request.job;
+      id = request.receipt.jobId;
+      at = request.receipt.createdAt;
+    }
+    const active = await this.active();
     assert((active?.value.releaseId || null) === expectedReleaseId, 'RELEASE_CONFLICT', 409, '线上版本已改变，请刷新后再发布');
     assert(/^[a-f0-9]{40}$/u.test(this.codeSha), 'BUILD_NOT_CONFIGURED', 503, '发布代码版本尚未配置');
     assert(new Set(changes.map(change => `${change.collection}/${change.id}`)).size === changes.length, 'DUPLICATE_CHANGE', 422, '同一内容不能重复出现在发布清单');
-    const id = crypto.randomUUID(), at = new Date(this.now()).toISOString();
     const snapshot = active ? await this.snapshot(active.value.releaseId) : emptySnapshot(id); snapshot.releaseId = id;
     const selectedRevisionIds: Record<string, string> = {};
     const selected = await this.store.getMany<DraftRecord>(changes.map(change => `${change.collection}/${change.id}`));
@@ -135,7 +202,25 @@ export class Releases {
     assert(new TextEncoder().encode(json).length <= 10 * 1024 * 1024, 'SNAPSHOT_TOO_LARGE', 422, '发布快照超过当前上限，请减少单次公开内容');
     await immutableJson(this.bucket, `${snapshotPrepared ? 'private-snapshots' : 'private-snapshot-sources'}/${id}.json`, snapshot, 10 * 1024 * 1024);
     const job: ReleaseJob = { id, status: 'queued', changes, previousReleaseId: active?.value.releaseId || null, previousEtag: active?.etag || null, authorUid: uid, createdAt: at, updatedAt: at, codeSha: this.codeSha, runId: null, manifestSha256: null, snapshotSha256, selectedRevisionIds, snapshotPrepared, preparedAssetCount: snapshot.assets.length, assetCount: ids.length };
-    await this.store.transaction(async tx => { await tx.get(`releases/${id}`); tx.put(`releases/${id}`, job); }); return job;
+    return this.store.transaction(async tx => { const existing = await tx.get<ReleaseJob>(`releases/${id}`); if (existing) return existing; tx.put(`releases/${id}`, job); return job; });
+  }
+  async retryDispatchJob(id: string): Promise<ReleaseJob> {
+    const job = await this.get(id);
+    assert(job.status === 'queued', 'BUILD_STATE_CONFLICT', 409, '此候选已经开始处理或已结束，请刷新查看状态');
+    assert(job.codeSha === this.codeSha, 'BUILD_CODE_CHANGED', 409, '构建代码已更新，请按当前代码重新生成候选');
+    assert(((await this.active())?.value.releaseId || null) === job.previousReleaseId, 'RELEASE_BASE_CHANGED', 409, '公开版本已改变，请按当前版本重新生成候选');
+    return job;
+  }
+  async noteDispatch(id: string, confirmed: boolean, retry = false): Promise<ReleaseJob> {
+    return this.store.transaction(async tx => {
+      const current = await tx.get<ReleaseJob>(`releases/${id}`); assert(current, 'NOT_FOUND', 404, '发布任务不存在');
+      // A runner may already have claimed the job while the dispatch response was in flight.
+      if (current.status !== 'queued' || current.dispatchState === 'confirmed' && !retry) return current;
+      const { error: _oldError, ...record } = current;
+      const next: ReleaseJob = { ...record, dispatchState: confirmed ? 'confirmed' : 'unconfirmed', updatedAt: new Date(this.now()).toISOString(),
+        ...(!confirmed ? { error: { code: 'BUILD_DISPATCH_UNCONFIRMED', message: '候选已保存，但自动构建派发尚未确认。重试会继续同一候选，不会重复创建版本。' } } : {}) };
+      tx.put(`releases/${id}`, next); return next;
+    });
   }
   /** One batch per HTTP request. The selected content is never read again from mutable drafts. */
   async prepareSnapshot(id: string, runId: string): Promise<ReleaseJob> {
@@ -302,6 +387,7 @@ export class Releases {
     if (active?.value.releaseId === id) return this.reconcile(id);
     assert(['ready', 'live', 'superseded', 'activating', 'reconciling'].includes(job.status), 'RELEASE_NOT_READY', 409, '发布尚未完成验证');
     assert((active?.value.releaseId || null) === expectedReleaseId, 'RELEASE_CONFLICT', 409, '线上版本已改变，请刷新后操作');
+    assert(job.status !== 'ready' || job.previousReleaseId === expectedReleaseId, 'RELEASE_BASE_CHANGED', 409, '此候选基于较早的公开版本，请按当前版本重新生成，避免覆盖后来发布的内容');
     assert(job.manifestSha256 && job.runId, 'RELEASE_NOT_READY', 409, '发布证据不完整');
     await this.store.transaction(async tx => { const current = await tx.get<ReleaseJob>(`releases/${id}`); assert(current, 'NOT_FOUND', 404, '任务不存在'); tx.put(`releases/${id}`, { ...current, status: 'activating', updatedAt: new Date(this.now()).toISOString() }); });
     const pointer: ActiveRelease = { releaseId: id, manifestSha256: job.manifestSha256, schemaVersion: 1, activatedAt: new Date(this.now()).toISOString(), codeSha: job.codeSha, runId: job.runId };
@@ -321,15 +407,16 @@ export class Releases {
   }
   async reconcile(id: string): Promise<ReleaseJob> {
     const active = await this.active(), job = await this.get(id);
-    if (active?.value.releaseId !== id) return job.status === 'live' ? { ...job, status: 'superseded' } : job;
+    if (active?.value.releaseId !== id) return { ...job, ...(job.status === 'live' ? { status: 'superseded' as const } : {}), reconciliationPending: false };
     assert(active.value.manifestSha256 === job.manifestSha256, 'RELEASE_INTEGRITY', 503, '线上发布清单正在核对');
-    if (job.status === 'live' && (job.reconciledRecords || 0) === job.changes.length) return job;
-    return this.store.transaction(async tx => {
+    if (job.status === 'live' && (job.reconciledRecords || 0) === job.changes.length) return { ...job, reconciliationPending: false };
+    const result = await this.store.transaction(async tx => {
       const current = await tx.get<ReleaseJob>(`releases/${id}`); assert(current, 'NOT_FOUND', 404, '任务不存在');
       const batch = current.changes.slice(current.reconciledRecords || 0, (current.reconciledRecords || 0) + 10);
       const records = await Promise.all(batch.map(change => tx.get<DraftRecord>(`${change.collection}/${change.id}`)));
       records.forEach((record, index) => { if (!record) return; const change = batch[index]!; tx.put(`${change.collection}/${change.id}`, { ...record, visibility: change.action === 'publish' ? 'published' : 'hidden', lastPublishedRevisionId: change.action === 'publish' ? current.selectedRevisionIds[`${change.collection}/${change.id}`] : record.lastPublishedRevisionId }); });
       const next = { ...current, status: 'live' as const, reconciledRecords: (current.reconciledRecords || 0) + batch.length, updatedAt: new Date(this.now()).toISOString() }; tx.put(`releases/${id}`, next); return next;
     });
+    return { ...result, reconciliationPending: (result.reconciledRecords || 0) < result.changes.length };
   }
 }

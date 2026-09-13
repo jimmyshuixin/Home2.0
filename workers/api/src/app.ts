@@ -102,6 +102,7 @@ export function createApi(runtime: Runtime) {
   }
   app.get('/api/v1/admin/revisions/:id', async c => { IdSchema.parse(c.req.param('id')); const value = await runtime.store.get(`revisions/${c.req.param('id')}`); assert(value, 'NOT_FOUND', 404, '历史版本不存在'); return response(value, c.get('requestId')); });
   app.get('/api/v1/admin/media', async c => { const page = await runtime.store.list<MediaAsset>('media', { limit: 50, cursor: c.req.query('cursor') }); return response(page.items.map(item => item.data), c.get('requestId'), { nextCursor: page.nextCursor, quota: await media.quota() }); });
+  app.get('/api/v1/admin/media/:id', async c => { const id = IdSchema.parse(c.req.param('id')), asset = await runtime.store.get<MediaAsset>(`media/${id}`); assert(asset, 'NOT_FOUND', 404, '媒体不存在'); return response(asset, c.get('requestId')); });
   app.post('/api/v1/admin/media/uploads', async c => response(media.publicUpload(await media.start(await input(c.req.raw, 4096), c.get('session').uid)), c.get('requestId'), {}, 201));
   app.get('/api/v1/admin/media/uploads/:id', async c => { IdSchema.parse(c.req.param('id')); return response(media.publicUpload(await media.get(c.req.param('id'), c.get('session').uid)), c.get('requestId')); });
   app.put('/api/v1/admin/media/uploads/:id/parts/:part', async c => { IdSchema.parse(c.req.param('id')); return response(await media.part(c.req.param('id'), Number(c.req.param('part')), c.req.raw, c.get('session').uid), c.get('requestId')); });
@@ -114,13 +115,34 @@ export function createApi(runtime: Runtime) {
     const result = await serveObject(runtime.bucket, variant?.key || asset.originalKey, c.req.raw, variant?.mime || 'application/octet-stream', true, 'private');
     if (role === 'original') result.headers.set('content-disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(asset.originalName)); return result;
   });
+  app.get('/api/v1/admin/release-changes', async c => {
+    const collection = z.enum(['creations', 'albums', 'fitness', 'playlists', 'settings']).parse(c.req.query('collection'));
+    const expected = c.req.query('expectedReleaseId'), expectedReleaseId = expected === undefined ? undefined : expected === 'unpublished' ? null : IdSchema.parse(expected);
+    const page = await releases.changesPage(collection, c.req.query('cursor'), expectedReleaseId);
+    return response(page.items, c.get('requestId'), { nextCursor: page.nextCursor, activeReleaseId: page.activeReleaseId });
+  });
   app.get('/api/v1/admin/releases', async c => { const page = await runtime.store.list('releases', { limit: 50, cursor: c.req.query('cursor') }), active = await releases.active(); return response(page.items.map(item => item.data), c.get('requestId'), { nextCursor: page.nextCursor, activeReleaseId: active?.value.releaseId || null }); });
   app.post('/api/v1/admin/releases', async c => {
-    const job = await releases.create(await input(c.req.raw), c.get('session').uid);
-    if (runtime.dispatchBuild) await runtime.dispatchBuild(job);
+    let job = await releases.create(await input(c.req.raw), c.get('session').uid, c.req.header('idempotency-key'));
+    if (runtime.dispatchBuild && job.status === 'queued' && job.dispatchState !== 'confirmed') {
+      job = await releases.retryDispatchJob(job.id);
+      let confirmed = false;
+      try { await runtime.dispatchBuild(job); confirmed = true; }
+      catch { /* Preserve the saved candidate so the same idempotency key can resume dispatch. */ }
+      job = await releases.noteDispatch(job.id, confirmed);
+    }
     return response(job, c.get('requestId'), {}, 201);
   });
   app.get('/api/v1/admin/releases/:id', async c => response(await releases.reconcile(c.req.param('id')), c.get('requestId')));
+  app.post('/api/v1/admin/releases/:id/retry', async c => {
+    let job = await releases.retryDispatchJob(c.req.param('id'));
+    assert(runtime.dispatchBuild, 'BUILD_NOT_CONFIGURED', 503, '自动构建尚未配置');
+    let confirmed = false;
+    try { await runtime.dispatchBuild(job); confirmed = true; }
+    catch { /* The queued candidate remains recoverable through this same endpoint. */ }
+    job = await releases.noteDispatch(job.id, confirmed, true);
+    return response(job, c.get('requestId'));
+  });
   app.post('/api/v1/admin/releases/:id/activate', async c => { const values = z.object({ expectedReleaseId: IdSchema.nullable() }).strict().parse(await input(c.req.raw, 4096)); return response(await releases.activate(c.req.param('id'), values.expectedReleaseId), c.get('requestId')); });
   app.post('/api/v1/admin/releases/:id/preview', async c => {
     const job = await releases.get(c.req.param('id')); assert(['ready', 'live', 'superseded'].includes(job.status), 'PREVIEW_NOT_READY', 409, '预览尚未准备好');

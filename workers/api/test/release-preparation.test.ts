@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { AlbumDraftSchema } from '@xvyin/contracts';
+import { AlbumDraftSchema, CreationDraftSchema, FitnessEntryDraftSchema, FitnessSettingsDraftSchema, PlaylistDraftSchema, SiteSettingsSchema } from '@xvyin/contracts';
 import { Releases, type ReleaseJob, type ReleaseManifest } from '../src/releases';
 import { Records } from '../src/records';
 import { MemoryStore } from '../src/store/memory';
@@ -78,6 +78,39 @@ function files() {
 }
 
 describe('cross-request asset preparation using real local R2 conditional writes', () => {
+  it('freezes 50 selected changes across all modules with bounded bulk reads, including idempotent creation and dispatch bookkeeping', async () => {
+    const records = new Records(memory, () => instant), changes: ReleaseJob['changes'] = [];
+    for (let index = 0; index < 12; index++) {
+      const creation = await records.save('creations', CreationDraftSchema, { title: `Test creation ${index}`, slug: `test-${index}`, blocks: [{ id: 'quote', type: 'quote', text: 'Local synthetic test content' }] }, 'test-admin');
+      const album = await records.save('albums', AlbumDraftSchema, { title: `Test album ${index}`, slug: `test-${index}`, photos: [] }, 'test-admin');
+      const fitness = await records.save('fitness', FitnessEntryDraftSchema, { title: `Test fitness ${index}`, entryDate: '2026-09-12' }, 'test-admin');
+      const playlist = await records.save('playlists', PlaylistDraftSchema, { name: `Test playlist ${index}`, source: 'local' }, 'test-admin');
+      changes.push({ collection: 'creations', id: creation.id, version: 1, action: 'publish' }, { collection: 'albums', id: album.id, version: 1, action: 'publish' }, { collection: 'fitness', id: fitness.id, version: 1, action: 'publish' }, { collection: 'playlists', id: playlist.id, version: 1, action: 'publish' });
+    }
+    await records.save('settings', SiteSettingsSchema, { intro: 'Local test settings' }, 'test-admin', 'site');
+    await records.save('settings', FitnessSettingsDraftSchema, { startDate: null }, 'test-admin', 'fitness');
+    changes.push({ collection: 'settings', id: 'site', version: 1, action: 'publish' }, { collection: 'settings', id: 'fitness', version: 1, action: 'publish' });
+    operations = 0; batches = [];
+    const key = crypto.randomUUID(), input = { changes, expectedReleaseId: null };
+    const job = await releases.create(input, 'test-admin', key);
+    expect(job.id).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u);
+    await releases.noteDispatch(job.id, true);
+    // Includes R2 + Firestore begin/read/commit protocol costs. The production
+    // auth/provider path and one GitHub dispatch add their own bounded requests.
+    expect(operations).toBeLessThanOrEqual(16); expect(batches.filter(value => value > 0)).toEqual([50]);
+    const snapshot = await releases.snapshot(job.id);
+    expect(snapshot.creations).toHaveLength(12); expect(snapshot.albums).toHaveLength(12); expect(snapshot.fitness.entries).toHaveLength(12); expect(snapshot.playlists).toHaveLength(12);
+    expect(snapshot.settings.intro).toBe('Local test settings'); expect(snapshot.fitness.settings.startDate).toBeNull();
+    operations = 0; batches = [];
+    expect((await releases.create({ ...input, changes: [...changes].reverse() }, 'test-admin', key)).id).toBe(job.id);
+    expect(operations).toBe(4); expect(batches).toEqual([]);
+    const concurrentKey = crypto.randomUUID();
+    const [first, second] = await Promise.all([releases.create(input, 'test-admin', concurrentKey), releases.create(input, 'test-admin', concurrentKey)]);
+    expect(first.id).toBe(second.id); expect(first.id).not.toBe(job.id);
+    await releases.claim(first.id, 'same-candidate-runner', codeSha);
+    expect(await releases.create(input, 'test-admin', concurrentKey)).toMatchObject({ id: first.id, status: 'building', runId: 'same-candidate-runner' });
+  });
+
   it('prepares 250 assets across requests, keeps selected content frozen, and only then exposes the final snapshot', async () => {
     const { job, recordId } = await candidate();
     expect(job).toMatchObject({ snapshotPrepared: false, preparedAssetCount: 100, assetCount: 250 });

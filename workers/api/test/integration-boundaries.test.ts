@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { AlbumDraftSchema, CreationDraftSchema, HERO_TITLE, MEDIA_LIMITS, SiteSettingsSchema } from '@xvyin/contracts';
+import { AlbumDraftSchema, CreationDraftSchema, FitnessSettingsDraftSchema, HERO_TITLE, MEDIA_LIMITS, PlaylistDraftSchema, SiteSettingsSchema } from '@xvyin/contracts';
 import { createApi, type Runtime } from '../src/app';
 import { AuthError, type AuthProvider } from '../src/auth';
 import worker from '../src/index';
 import { installStatisticsProjection, statisticsRebuildPage, type DraftRecord, type StatisticsProjection } from '../src/records';
 import { Media, PART_SIZE, type MediaAsset, type Upload } from '../src/media';
-import { type ReleaseJob, type Snapshot } from '../src/releases';
+import { type ReleaseCandidate, type ReleaseJob, type Snapshot } from '../src/releases';
 import { sha256 } from '../src/security';
 import { MemoryStore } from '../src/store/memory';
 
@@ -239,6 +239,158 @@ describe('published homepage title integrity', () => {
 });
 
 describe('release isolation and actual R2 conditional activation', () => {
+  it('lists saved candidates against the actual public snapshot despite an active private preview', async () => {
+    const session = await login();
+    const original = await api.records.save('creations', CreationDraftSchema, creation('Public original'), uid, 'original');
+    const hidden = await api.records.save('creations', CreationDraftSchema, { ...creation('Hidden original'), slug: 'hidden-original' }, uid, 'hidden');
+    const first = await finishBuild(await api.releases.create({ changes: [original, hidden].map(record => ({ collection: 'creations', id: record.id, version: 1, action: 'publish' })), expectedReleaseId: null }, uid));
+    await api.releases.activate(first.id, null);
+    const second = await finishBuild(await api.releases.create({ changes: [{ collection: 'creations', id: hidden.id, version: 1, action: 'hide' }], expectedReleaseId: first.id }, uid));
+    await api.releases.activate(second.id, first.id);
+    const edited = await api.records.save('creations', CreationDraftSchema, creation('New private title'), uid, original.id, 1);
+    await api.records.save('creations', CreationDraftSchema, { ...creation('Unpublished'), slug: 'unpublished' }, uid, 'new');
+    const preview = await finishBuild(await api.releases.create({ changes: [{ collection: 'creations', id: edited.id, version: 2, action: 'publish' }], expectedReleaseId: second.id }, uid));
+    const result = await request(`/api/v1/admin/release-changes?collection=creations&expectedReleaseId=${second.id}`, session, { headers: { cookie: `${session.cookie}; __Host-xvyin_preview=${preview.id}` } });
+    expect(result.status).toBe(200);
+    const body = await result.json() as { data: ReleaseCandidate[]; meta: { activeReleaseId: string; nextCursor: string | null } };
+    expect(body.meta).toMatchObject({ activeReleaseId: second.id, nextCursor: null });
+    expect(body.data.find(item => item.id === original.id)).toMatchObject({ title: 'New private title', changeKind: 'modified', version: 2, draftRevisionId: edited.draftRevisionId, publishedRevisionId: original.draftRevisionId, actions: ['publish', 'hide'] });
+    expect(body.data.find(item => item.id === hidden.id)).toMatchObject({ changeKind: 'hidden', publishedRevisionId: null, actions: ['publish'] });
+    expect(body.data.find(item => item.id === 'new')).toMatchObject({ changeKind: 'new', actions: ['publish'] });
+    expect(JSON.stringify(body)).not.toContain('Explicit integration test content');
+    expect((await request(`/api/v1/admin/release-changes?collection=creations&expectedReleaseId=${first.id}`, session)).status).toBe(409);
+    expect((await request('/api/v1/admin/release-changes?collection=creations')).status).toBe(401);
+  });
+
+  it('paginates beyond 50 records without dropping candidates and excludes never-saved settings', async () => {
+    const session = await login();
+    for (let index = 0; index < 53; index++) await api.records.save('creations', CreationDraftSchema, { ...creation(`Candidate ${index}`), slug: `candidate-${index}` }, uid, `candidate-${String(index).padStart(3, '0')}`);
+    const first = await (await request('/api/v1/admin/release-changes?collection=creations&expectedReleaseId=unpublished', session)).json() as { data: ReleaseCandidate[]; meta: { nextCursor: string; activeReleaseId: null } };
+    expect(first.data).toHaveLength(50); expect(first.meta.activeReleaseId).toBeNull(); expect(first.meta.nextCursor).toBeTruthy();
+    const second = await (await request(`/api/v1/admin/release-changes?collection=creations&expectedReleaseId=unpublished&cursor=${first.meta.nextCursor}`, session)).json() as { data: ReleaseCandidate[]; meta: { nextCursor: null } };
+    expect(second.data).toHaveLength(3); expect(second.meta.nextCursor).toBeNull();
+    expect(new Set([...first.data, ...second.data].map(item => item.id)).size).toBe(53);
+    expect((await (await request('/api/v1/admin/release-changes?collection=settings', session)).json() as { data: unknown[] }).data).toEqual([]);
+    expect((await request(`/api/v1/admin/release-changes?collection=settings&cursor=${first.meta.nextCursor}`, session)).status).toBe(422);
+  });
+
+  it('compares normalized settings content instead of stale reconciliation metadata', async () => {
+    const session = await login();
+    const record = await api.records.save('settings', SiteSettingsSchema, { intro: 'Current introduction' }, uid, 'site');
+    const first = await finishBuild(await api.releases.create({ changes: [{ collection: 'settings', id: 'site', version: 1, action: 'publish' }], expectedReleaseId: null }, uid));
+    await api.releases.activate(first.id, null);
+    await api.records.save('settings', SiteSettingsSchema, record.draft, uid, 'site', 1);
+    let body = await (await request(`/api/v1/admin/release-changes?collection=settings&expectedReleaseId=${first.id}`, session)).json() as { data: ReleaseCandidate[] };
+    expect(body.data[0]).toMatchObject({ id: 'site', version: 2, changeKind: 'unchanged', publishedRevisionId: null, actions: ['publish'] });
+    await api.records.save('settings', SiteSettingsSchema, { ...record.draft, intro: 'Saved modification' }, uid, 'site', 2);
+    await api.records.save('settings', FitnessSettingsDraftSchema, { startDate: null }, uid, 'fitness');
+    body = await (await request('/api/v1/admin/release-changes?collection=settings', session)).json() as { data: ReleaseCandidate[] };
+    expect(body.data.find(item => item.id === 'site')?.changeKind).toBe('modified');
+    expect(body.data.find(item => item.id === 'fitness')?.changeKind).toBe('unchanged');
+  });
+
+  it('rejects an old ready candidate after another release wins, while allowing explicit restoration of a previously live version', async () => {
+    const first = await readyCreation('Original'); await api.releases.activate(first.id, null);
+    const record = await api.records.save('creations', CreationDraftSchema, { ...creation('New item'), slug: 'new-item' }, uid);
+    const input = { changes: [{ collection: 'creations', id: record.id, version: 1, action: 'publish' }], expectedReleaseId: first.id };
+    const candidate = await finishBuild(await api.releases.create(input, uid));
+    const winner = await finishBuild(await api.releases.create(input, uid)); await api.releases.activate(winner.id, first.id);
+    await expect(api.releases.activate(candidate.id, winner.id)).rejects.toMatchObject({ code: 'RELEASE_BASE_CHANGED', status: 409 });
+    expect((await api.releases.active())?.value.releaseId).toBe(winner.id);
+    expect((await api.releases.activate(first.id, winner.id)).status).toBe('live');
+  });
+
+  it('publishes 50 selected records atomically, keeps another draft private, and completes metadata in ten-record requests', async () => {
+    const changes: ReleaseJob['changes'] = [];
+    for (let index = 0; index < 50; index++) {
+      const record = await api.records.save('creations', CreationDraftSchema, { ...creation(`Batch ${index}`), slug: `batch-${index}` }, uid);
+      changes.push({ collection: 'creations', id: record.id, version: 1, action: 'publish' });
+    }
+    const privateDraft = await api.records.save('creations', CreationDraftSchema, { ...creation('Do not publish'), slug: 'private-draft' }, uid);
+    await expect(api.releases.create({ changes: [...changes, { collection: 'creations', id: privateDraft.id, version: 1, action: 'publish' }], expectedReleaseId: null }, uid)).rejects.toThrow();
+    const ready = await finishBuild(await api.releases.create({ changes, expectedReleaseId: null }, uid));
+    let job = await api.releases.activate(ready.id, null);
+    expect(job).toMatchObject({ status: 'live', reconciledRecords: 10, reconciliationPending: true });
+    expect((await api.releases.snapshot(ready.id)).creations).toHaveLength(50);
+    expect((await api.releases.snapshot(ready.id)).creations.some(item => item.id === privateDraft.id)).toBe(false);
+    const session = await login();
+    for (let count = 20; count <= 50; count += 10) {
+      job = (await (await request(`/api/v1/admin/releases/${ready.id}`, session)).json() as { data: ReleaseJob }).data;
+      expect(job).toMatchObject({ reconciledRecords: count, reconciliationPending: count < 50 });
+    }
+    for (const change of changes) expect(await store.get<DraftRecord>(`creations/${change.id}`)).toMatchObject({ visibility: 'published', lastPublishedRevisionId: job.selectedRevisionIds[`creations/${change.id}`] });
+    expect((await store.get<DraftRecord>(`creations/${privateDraft.id}`))?.visibility).toBe('draft');
+  });
+
+  it('switches the default playlist by publishing both related edits in one candidate', async () => {
+    const firstList = await api.records.save('playlists', PlaylistDraftSchema, { name: 'First test playlist', source: 'local', isDefault: true }, uid);
+    const secondList = await api.records.save('playlists', PlaylistDraftSchema, { name: 'Second test playlist', source: 'local' }, uid);
+    const initial = await finishBuild(await api.releases.create({ changes: [firstList, secondList].map(record => ({ collection: 'playlists', id: record.id, version: 1, action: 'publish' })), expectedReleaseId: null }, uid));
+    await api.releases.activate(initial.id, null);
+    await api.records.save('playlists', PlaylistDraftSchema, { ...firstList.draft, isDefault: false }, uid, firstList.id, 1);
+    await api.records.save('playlists', PlaylistDraftSchema, { ...secondList.draft, isDefault: true }, uid, secondList.id, 1);
+    await expect(api.releases.create({ changes: [{ collection: 'playlists', id: secondList.id, version: 2, action: 'publish' }], expectedReleaseId: initial.id }, uid)).rejects.toMatchObject({ code: 'DEFAULT_PLAYLIST_CONFLICT' });
+    const candidate = await finishBuild(await api.releases.create({ changes: [firstList, secondList].map(record => ({ collection: 'playlists', id: record.id, version: 2, action: 'publish' })), expectedReleaseId: initial.id }, uid));
+    expect((await api.releases.snapshot(initial.id)).playlists.find(item => item.isDefault)?.id).toBe(firstList.id);
+    expect((await api.releases.active())?.value.releaseId).toBe(initial.id);
+    await api.releases.activate(candidate.id, initial.id);
+    expect((await api.releases.snapshot(candidate.id)).playlists.filter(item => item.isDefault).map(item => item.id)).toEqual([secondList.id]);
+  });
+
+  it('keeps hidden batch entries out of new drafts before their metadata synchronization finishes', async () => {
+    const changes: ReleaseJob['changes'] = [];
+    for (let index = 0; index < 12; index++) {
+      const record = await api.records.save('creations', CreationDraftSchema, { ...creation(`Batch ${index}`), slug: `batch-${index}` }, uid);
+      changes.push({ collection: 'creations', id: record.id, version: 1, action: 'publish' });
+    }
+    const first = await finishBuild(await api.releases.create({ changes, expectedReleaseId: null }, uid));
+    expect((await api.releases.activate(first.id, null)).reconciliationPending).toBe(true);
+    const hidden = await finishBuild(await api.releases.create({ changes: changes.map(change => ({ ...change, action: 'hide' })), expectedReleaseId: first.id }, uid));
+    expect((await api.releases.activate(hidden.id, first.id)).reconciliationPending).toBe(true);
+    const page = await api.releases.changesPage('creations');
+    expect(page.items).toHaveLength(12); expect(page.items.every(item => item.changeKind === 'hidden')).toBe(true);
+  });
+
+  it('reuses one candidate and retries an unconfirmed build dispatch with the same idempotency key', async () => {
+    const dispatchBuild = vi.fn().mockRejectedValueOnce(new Error('private transport detail')).mockRejectedValueOnce(new Error('second private transport detail')).mockResolvedValue(undefined);
+    api = createApi({ store, bucket, auth, now: () => instant, secureCookies: true, allowedOrigins: [origin], privacySalt: 'test-only-salt-'.repeat(4), adminUsername: 'test-admin', codeSha, dispatchBuild });
+    const session = await login(), record = await api.records.save('creations', CreationDraftSchema, creation('Idempotent draft'), uid);
+    const body = { changes: [{ collection: 'creations', id: record.id, version: 1, action: 'publish' }], expectedReleaseId: null }, headers = { 'idempotency-key': crypto.randomUUID() };
+    const first = await request('/api/v1/admin/releases', session, { method: 'POST', headers, body });
+    expect(first.status).toBe(201); const job = (await first.json() as { data: ReleaseJob }).data;
+    expect(job.id).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u);
+    expect(job).toMatchObject({ status: 'queued', dispatchState: 'unconfirmed', error: { code: 'BUILD_DISPATCH_UNCONFIRMED' } });
+    const retried = (await (await request('/api/v1/admin/releases', session, { method: 'POST', headers, body })).json() as { data: ReleaseJob }).data;
+    expect(retried).toMatchObject({ id: job.id, dispatchState: 'unconfirmed' });
+    const second = (await (await request(`/api/v1/admin/releases/${job.id}/retry`, session, { method: 'POST', body: {} })).json() as { data: ReleaseJob }).data;
+    expect(second).toMatchObject({ id: job.id, dispatchState: 'confirmed' }); expect(second.error).toBeUndefined();
+    await request('/api/v1/admin/releases', session, { method: 'POST', headers, body }); expect(dispatchBuild).toHaveBeenCalledTimes(3);
+    expect((await store.list('releases', { limit: 50 })).items).toHaveLength(1);
+    expect((await request('/api/v1/admin/releases', session, { method: 'POST', headers, body: { ...body, changes: [{ ...body.changes[0], action: 'hide' }] } })).status).toBe(409);
+    await finishBuild(second);
+    expect((await request(`/api/v1/admin/releases/${job.id}/retry`, session, { method: 'POST', body: {} })).status).toBe(409);
+  });
+
+  it('rejects dispatch retries after either the code or public baseline changes', async () => {
+    const record = await api.records.save('creations', CreationDraftSchema, creation('Queued candidate'), uid);
+    const input = { changes: [{ collection: 'creations', id: record.id, version: 1, action: 'publish' }], expectedReleaseId: null };
+    const old = await api.releases.create(input, uid), winner = await finishBuild(await api.releases.create(input, uid));
+    await store.transaction(async tx => { const current = await tx.get<ReleaseJob>(`releases/${old.id}`); tx.put(`releases/${old.id}`, { ...current, codeSha: 'b'.repeat(40) }); });
+    await expect(api.releases.retryDispatchJob(old.id)).rejects.toMatchObject({ code: 'BUILD_CODE_CHANGED' });
+    await store.transaction(async tx => { const current = await tx.get<ReleaseJob>(`releases/${old.id}`); tx.put(`releases/${old.id}`, { ...current, codeSha }); });
+    await api.releases.activate(winner.id, null);
+    await expect(api.releases.retryDispatchJob(old.id)).rejects.toMatchObject({ code: 'RELEASE_BASE_CHANGED' });
+  });
+
+  it('exposes selected media metadata only to an administrator and does not fetch its original', async () => {
+    const asset = await seedAsset('selected_asset'), session = await login();
+    expect((await request(`/api/v1/admin/media/${asset.id}`)).status).toBe(401);
+    const result = await request(`/api/v1/admin/media/${asset.id}`, session); expect(result.status).toBe(200); expect(result.headers.get('cache-control')).toBe('no-store');
+    expect((await result.json() as { data: MediaAsset }).data).toMatchObject({ id: asset.id, status: 'ready', variants: [{ role: 'content' }] });
+    expect((await request('/api/v1/admin/media/missing', session)).status).toBe(404);
+    expect((await request('/api/v1/admin/media/invalid%2Fid', session)).status).toBe(422);
+  });
+
   it('keeps draft and hidden photos out of the snapshot and its media allowlist', async () => {
     for (const id of ['asset_public', 'asset_draft', 'asset_hidden']) await seedAsset(id);
     const draft = AlbumDraftSchema.parse({ title: 'Test album', slug: 'test-album', photos: [
