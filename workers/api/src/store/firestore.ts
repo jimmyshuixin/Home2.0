@@ -1,5 +1,6 @@
 import { readBoundedJson, safeStoreExceptionName } from './google-oauth';
 import { BufferedTransaction, deserializeJson, listOptions, makeCursor, MAX_STORED_JSON_BYTES, StoreError, validateKey, validateKeys, type Store, type Transaction } from './types';
+import { mediaCursor, mediaQueryOptions, mediaSortValue, type MediaQueryOptions, type MediaQueryPage } from './media-query';
 
 const FIRESTORE_ORIGIN = 'https://firestore.googleapis.com';
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
@@ -154,6 +155,26 @@ export class FirestoreStore implements Store {
     const page = items.slice(0, limit);
     return { items: page, nextCursor: items.length > limit ? makeCursor(collection, page[page.length - 1]!.id) : null };
   }
+  async queryMedia<T>(options: MediaQueryOptions): Promise<MediaQueryPage<T>> {
+    const { limit, after } = mediaQueryOptions(options);
+    const result = await this.#request('runQuery', { structuredQuery: {
+      from: [{ collectionId: `${this.#prefix}media_catalog` }], orderBy: [{ field: { fieldPath: `sort_${options.sort}` }, direction: options.direction === 'asc' ? 'ASCENDING' : 'DESCENDING' }], limit: limit + 1,
+      ...(after ? { startAt: { values: [{ stringValue: after }], before: false } } : {}),
+    } });
+    if (!Array.isArray(result) || !result.every(isObject)) throw new StoreError('STORE_UNAVAILABLE');
+    const rows = result.filter(row => 'document' in row).map(row => {
+      if (!isObject(row.document) || typeof row.document.name !== 'string') throw new StoreError('STORE_UNAVAILABLE');
+      const prefix = `${this.#documents}/${this.#prefix}media_catalog/`;
+      if (!row.document.name.startsWith(prefix)) throw new StoreError('STORE_UNAVAILABLE');
+      const id = row.document.name.slice(prefix.length); validateKey(`media_catalog/${id}`);
+      const data = deserializeJson<Record<string, unknown>>(this.#payload(row.document, this.#name(`media_catalog/${id}`)));
+      return { id, data: data as T, sortValue: mediaSortValue(data, options.sort) };
+    });
+    if (rows.length > limit + 1) throw new StoreError('STORE_UNAVAILABLE');
+    let previous = after;
+    for (const row of rows) { if (previous && (options.direction === 'asc' ? row.sortValue <= previous : row.sortValue >= previous)) throw new StoreError('STORE_UNAVAILABLE'); previous = row.sortValue; }
+    const items = rows.slice(0, limit); return { items, nextCursor: rows.length > limit ? mediaCursor(options, items.at(-1)!.sortValue) : null };
+  }
   async transaction<T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
     let retryTransaction: string | undefined;
     for (let attempt = 0; attempt < this.#maxAttempts; attempt++) {
@@ -168,7 +189,7 @@ export class FirestoreStore implements Store {
         const result = await callback(tx);
         const writes = tx.finish().map(write => write.payload === null
           ? { delete: this.#name(write.key) }
-          : { update: { name: this.#name(write.key), fields: { schema_version: { integerValue: '1' }, record_json: { stringValue: write.payload } } } });
+          : { update: { name: this.#name(write.key), fields: { schema_version: { integerValue: '1' }, record_json: { stringValue: write.payload }, ...(write.key.startsWith('media_catalog/') ? Object.fromEntries((['created', 'name', 'size'] as const).map(sort => [`sort_${sort}`, { stringValue: mediaSortValue(JSON.parse(write.payload!), sort) }])) : {}) } } });
         if (writes.length > 500) throw new StoreError('STORE_INVALID_VALUE');
         // A transport error here is ambiguous. Only an explicit ABORTED response is retried.
         const committed = await this.#request('commit', { writes, transaction }, 512 * 1024);

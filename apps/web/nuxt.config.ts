@@ -33,6 +33,6 @@ export default defineNuxtConfig({
       { name: 'theme-color', content: '#F7F5EF' }, { name: 'xvyin-release', content: snapshot.releaseId }, { name: 'robots', content: indexable ? 'index,follow' : 'noindex,nofollow' }, { name: 'description', content: '虚宁的个人网站。创作、摄影与日常记录。' }],
     link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }] } },
   nitro: { publicAssets: [{ dir: generatedPublic }], prerender: { crawlLinks: false, routes, failOnError: true }, devProxy: { '/api': { target: `${process.env.XVYIN_DEV_API_ORIGIN || 'http://127.0.0.1:8787'}/api`, changeOrigin: false } } },
-  experimental: { payloadExtraction: true },
+  experimental: { payloadExtraction: true, defaults: { nuxtLink: { prefetchOn: { visibility: false, interaction: true } } } },
   typescript: { strict: true }
 })

@@ -89,6 +89,12 @@ export function useMusic() {
     } catch { if (runtime.requests.currentRefresh(request)) playlistError.value = '歌单暂时无法加载，请重试。' }
     finally { if (runtime.requests.currentRefresh(request)) loading.value = false }
   }
+  async function initialize() {
+    // The compiled published snapshot already contains the allowed playlists.
+    // Fetch only the selected playlist instead of a serial settings round trip.
+    const id = preferredMusicPlaylist(playlists.value)
+    if (id) await loadPlaylist(id)
+  }
   function selectPlaylist(id: string) {
     playlistChosen.value = true
     return loadPlaylist(id)
@@ -123,5 +129,5 @@ export function useMusic() {
   function next() { const following = nextMusicIndex(index.value, tracks.value.length, mode.value === 'repeat-one' ? 'sequential' : mode.value); if (following !== null) void selectTrack(following) }
   function cycleMode() { mode.value = nextMode.value }
   return { playlists, playlistId, tracks, track, source, canPlay, index, playing, pendingPlay, resolving, duration, position, volume, loading, error, mode, modeLabel, modeActionLabel, cycleMode,
-    lyrics, lyricsLoading, lyricsError, loadLyrics, refresh, selectPlaylist, selectTrack, toggle, seek, setVolume, previous, next, play, retry, attach, detach }
+    lyrics, lyricsLoading, lyricsError, loadLyrics, initialize, refresh, selectPlaylist, selectTrack, toggle, seek, setVolume, previous, next, play, retry, attach, detach }
 }

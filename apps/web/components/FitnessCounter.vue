@@ -20,7 +20,7 @@ async function refresh() {
     const remaining = midnight - serverNow - (performance.now() - requestedAt)
     expiresAt = performance.now() + Math.max(0, remaining)
     today.value = remaining > 0 ? data.todayDate : ''
-    next = Math.min(60000, Math.max(50, remaining))
+    next = Math.max(50, remaining + 50)
   } catch { today.value = '' }
   finally { busy = false }
   // Schedule at the trusted Shanghai midnight boundary; monotonic elapsed time

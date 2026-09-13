@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { IdSchema } from '@xvyin/contracts';
 import type { Store, Transaction } from './store/types';
 import { assert } from './errors';
+import { assertMediaFence, validateDraftMedia } from './media-lifecycle';
 export interface DraftRecord<T = unknown> {
   id: string; version: number; draft: T; visibility: 'draft' | 'published' | 'hidden';
   draftRevisionId: string; lastPublishedRevisionId: string | null; createdAt: string; updatedAt: string;
@@ -40,8 +41,10 @@ export class Records {
   constructor(private readonly store: Store, private readonly now: () => number) {}
   async save<T>(collection: string, schema: z.ZodType<T>, input: unknown, authorUid: string, id: string = crypto.randomUUID(), expectedVersion = 0): Promise<DraftRecord<T>> {
     IdSchema.parse(id); const draft = schema.parse(input), timestamp = new Date(this.now()).toISOString(), revisionId = crypto.randomUUID();
+    const mediaEpoch = await validateDraftMedia(this.store, draft, this.now());
     return this.store.transaction(async tx => {
       const existing = await tx.get<DraftRecord<T>>(`${collection}/${id}`);
+      await assertMediaFence(tx, this.now(), mediaEpoch);
       assert((existing?.version || 0) === expectedVersion, 'VERSION_CONFLICT', 409, '内容已在另一页面更新，请重新载入并合并');
       const counted = !existing && ['creations', 'albums', 'fitness', 'playlists'].includes(collection);
       const statistics = counted ? await readStatistics(tx) : null;

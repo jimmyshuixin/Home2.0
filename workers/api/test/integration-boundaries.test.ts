@@ -9,6 +9,7 @@ import { Media, PART_SIZE, type MediaAsset, type Upload } from '../src/media';
 import { type ReleaseCandidate, type ReleaseJob, type Snapshot } from '../src/releases';
 import { sha256 } from '../src/security';
 import { MemoryStore } from '../src/store/memory';
+import { type ManagedMedia, type PurgeJob } from '../src/media-library';
 
 // Test data only. R2 multipart, conditional writes and byte ranges run in the real
 // local workerd implementation. No Cloudflare or Firebase account is contacted.
@@ -88,6 +89,139 @@ async function readyCreation(title = 'Integration test creation'): Promise<Relea
   const record = await api.records.save('creations', CreationDraftSchema, creation(title), uid);
   return finishBuild(await api.releases.create({ changes: [{ collection: 'creations', id: record.id, version: 1, action: 'publish' }], expectedReleaseId: null }, uid));
 }
+
+describe('explicit rebuilding of published content', () => {
+  it('rejects empty ordinary releases, mixed draft rebuilds and a rebuild with no public base', async () => {
+    const session = await login();
+    for (const body of [
+      { changes: [], expectedReleaseId: null },
+      { changes: [{ collection: 'creations', id: 'local-only', version: 1, action: 'publish' }], expectedReleaseId: null, rebuildPublished: true },
+    ]) expect((await request('/api/v1/admin/releases', session, { method: 'POST', body })).status).toBe(422);
+    const unavailable = await request('/api/v1/admin/releases', session, { method: 'POST', body: { changes: [], expectedReleaseId: null, rebuildPublished: true } });
+    expect(unavailable.status).toBe(409);
+    expect((await unavailable.json() as { error: { code: string } }).error.code).toBe('REBUILD_REQUIRES_PUBLISHED');
+    expect((await store.list('releases')).items).toEqual([]);
+  });
+
+  it('freezes only the active snapshot through build and activation while all unpublished edits remain untouched', async () => {
+    await seedAsset('published-image');
+    const record = await api.records.save('creations', CreationDraftSchema, { ...creation('Published title'), coverAssetId: 'published-image' }, uid);
+    const initial = await finishBuild(await api.releases.create({ changes: [{ collection: 'creations', id: record.id, version: 1, action: 'publish' }], expectedReleaseId: null }, uid));
+    await api.releases.activate(initial.id, null);
+    const published = await api.releases.snapshot(initial.id);
+    await api.records.save('creations', CreationDraftSchema, { title: 'PRIVATE INCOMPLETE EDIT', blocks: [{ id: 'pending', type: 'image', assetId: '' }] }, uid, record.id, 1);
+    await api.records.save('creations', CreationDraftSchema, { title: 'PRIVATE NEW DRAFT' }, uid);
+    await api.records.save('settings', SiteSettingsSchema, { intro: 'PRIVATE SETTINGS' }, uid, 'site');
+    await api.records.save('settings', FitnessSettingsDraftSchema, { startDate: null }, uid, 'fitness');
+    await api.records.save('playlists', PlaylistDraftSchema, { name: 'PRIVATE PLAYLIST' }, uid);
+    const collections = ['creations', 'settings', 'playlists'];
+    const drafts = await Promise.all(collections.map(collection => store.list(collection)));
+    const reads = vi.spyOn(store, 'getMany');
+    const session = await login(), input = { changes: [], expectedReleaseId: initial.id, rebuildPublished: true }, key = crypto.randomUUID();
+    const created = await request('/api/v1/admin/releases', session, { method: 'POST', body: input, headers: { 'idempotency-key': key } });
+    expect(created.status).toBe(201);
+    const job = (await created.json() as { data: ReleaseJob }).data;
+    expect(job).toMatchObject({ changes: [], rebuildPublished: true, previousReleaseId: initial.id, selectedRevisionIds: {}, snapshotPrepared: true });
+    expect(reads.mock.calls).toEqual([]); reads.mockRestore();
+    expect(await api.releases.snapshot(job.id)).toEqual({ ...published, releaseId: job.id });
+    expect(await api.releases.create(input, uid, key)).toMatchObject({ id: job.id });
+    const ready = await finishBuild(job);
+    expect(await api.releases.activate(ready.id, initial.id)).toMatchObject({ status: 'live', reconciledRecords: 0, reconciliationPending: false });
+    expect(await api.releases.snapshot(ready.id)).toEqual({ ...published, releaseId: ready.id });
+    expect(await Promise.all(collections.map(collection => store.list(collection)))).toEqual(drafts);
+    expect(await (await request('/api/v1/creations')).text()).toContain('Published title');
+    expect(await (await request('/api/v1/creations')).text()).not.toContain('PRIVATE');
+    await expect(api.releases.create(input, uid)).rejects.toMatchObject({ code: 'RELEASE_CONFLICT' });
+  });
+});
+
+describe('private media management HTTP boundaries', () => {
+  it('requires authentication on reads and valid same-origin CSRF on every new mutation route', async () => {
+    for (const path of ['media', 'media/catalog', 'media/duplicates', 'media/purge-jobs/local-check']) expect((await request(`/api/v1/admin/${path}`)).status).toBe(401);
+    const session = await login();
+    const mutations = [
+      { path: 'media/catalog/advance', method: 'POST' }, { path: 'media/local-image', method: 'PATCH' },
+      ...['trash', 'restore', 'purge-check'].map(action => ({ path: `media/local-image/${action}`, method: 'POST' })),
+      ...['advance', 'confirm', 'cancel'].map(action => ({ path: `media/purge-jobs/local-check/${action}`, method: 'POST' })),
+    ];
+    for (const mutation of mutations) {
+      const path = `/api/v1/admin/${mutation.path}`;
+      expect((await request(path, session, { method: mutation.method, body: {}, headers: { 'x-csrf-token': '' } })).status).toBe(403);
+      expect((await request(path, session, { method: mutation.method, body: {}, headers: { origin: 'https://attacker.invalid' } })).status).toBe(403);
+    }
+    expect(await store.get('system/media_catalog')).toBeNull();
+    expect((await store.list('media_purge_jobs')).items).toEqual([]);
+  });
+
+  it('reports an unfinished legacy catalog and backfills small pages before serving old media', async () => {
+    const fixture = await seedAsset('legacy-template');
+    store = new MemoryStore(Object.fromEntries(Array.from({ length: 7 }, (_, index) => [`media/legacy-${index}`, { ...fixture, id: `legacy-${index}`, originalName: `legacy-${index}.jpg` }])));
+    api = createApi({ store, bucket, auth, now: () => instant, secureCookies: true, allowedOrigins: [origin], privacySalt: 'local-test-salt'.repeat(4), adminUsername: 'test-admin', codeSha });
+    const session = await login();
+    expect(await (await request('/api/v1/admin/media', session)).json()).toMatchObject({ data: [], meta: { catalogReady: false, nextCursor: null } });
+    expect(await (await request('/api/v1/admin/media/catalog/advance', session, { method: 'POST', body: {} })).json()).toMatchObject({ data: { ready: false, processed: 5 } });
+    expect(await (await request('/api/v1/admin/media/catalog/advance', session, { method: 'POST', body: {} })).json()).toMatchObject({ data: { ready: true, processed: 7 } });
+    const loaded = await (await request('/api/v1/admin/media?sort=name&direction=asc', session)).json() as { data: ManagedMedia[]; meta: { catalogReady: boolean } };
+    expect(loaded.meta.catalogReady).toBe(true); expect(loaded.data.map(item => item.id)).toEqual(Array.from({ length: 7 }, (_, index) => `legacy-${index}`));
+  });
+
+  it('applies server ordering and combined filters beyond the first 50 assets with a bound query cursor', async () => {
+    const fixture = await seedAsset('catalog-template'), session = await login();
+    await store.transaction(async tx => {
+      tx.delete('media/catalog-template');
+      for (let index = 0; index < 70; index++) {
+        const id = `http-${String(index).padStart(3, '0')}`;
+        tx.put(`media/${id}`, { ...fixture, id, originalName: `${String(index).padStart(3, '0')}-session.jpg`, category: index >= 60 ? 'fitness' : 'photography' });
+      }
+      tx.put('system/media_catalog', { ready: true, processed: 70, cursor: null, version: 1 });
+    });
+    const query = '/api/v1/admin/media?sort=name&direction=asc&category=fitness&kind=image&status=ready&q=session&limit=24';
+    const first = await (await request(query, session)).json() as { data: ManagedMedia[]; meta: { nextCursor: string; scanned: number } };
+    expect(first.data).toEqual([]); expect(first.meta.scanned).toBe(48); expect(first.meta.nextCursor).toBeTruthy();
+    const second = await (await request(`${query}&cursor=${encodeURIComponent(first.meta.nextCursor)}`, session)).json() as { data: ManagedMedia[]; meta: { nextCursor: null } };
+    expect(second.data.map(item => item.id)).toEqual(Array.from({ length: 10 }, (_, index) => `http-${String(60 + index).padStart(3, '0')}`));
+    expect(second.meta.nextCursor).toBeNull();
+    expect((await request(`${query.replace('category=fitness', 'category=photography')}&cursor=${encodeURIComponent(first.meta.nextCursor)}`, session)).status).toBe(422);
+  });
+
+  it('keeps storage keys out of every purge response and blocks private reads once physical cleanup is confirmed', async () => {
+    const asset = await seedAsset('purge-http'), session = await login();
+    await store.transaction(async tx => { tx.put('system/media_quota', { usedBytes: asset.originalBytes + asset.variants[0]!.bytes, reservedBytes: 0, limitBytes: MEDIA_LIMITS.totalBytes }); });
+    const trash = await request(`/api/v1/admin/media/${asset.id}/trash`, session, { method: 'POST', body: { expectedVersion: 1 } }); expect(trash.status).toBe(200);
+    type PublicPurge = Omit<PurgeJob, 'keys'> & { totalKeys: number };
+    const dto = async (response: Response): Promise<PublicPurge> => {
+      expect(response.ok).toBe(true);
+      const body = await response.json() as { data: PublicPurge };
+      expect(body.data).not.toHaveProperty('keys'); expect(body.data.totalKeys).toBe(2);
+      expect(JSON.stringify(body)).not.toContain('originals/'); expect(JSON.stringify(body)).not.toContain('variants/');
+      return body.data;
+    };
+    let job = await dto(await request(`/api/v1/admin/media/${asset.id}/purge-check`, session, { method: 'POST', body: { expectedVersion: 2 }, headers: { 'idempotency-key': crypto.randomUUID() } }));
+    const path = `/api/v1/admin/media/purge-jobs/${job.id}`;
+    await dto(await request(path, session));
+    for (let step = 0; job.status === 'checking' && step < 20; step++) job = await dto(await request(`${path}/advance`, session, { method: 'POST', body: {} }));
+    expect(job.status).toBe('ready'); expect(await bucket.head(asset.originalKey)).not.toBeNull();
+    job = await dto(await request(`${path}/confirm`, session, { method: 'POST', body: {} })); expect(job.status).toBe('deleting');
+    for (const suffix of ['', '/content']) expect((await request(`/api/v1/admin/media/${asset.id}${suffix}`, session)).status).toBe(404);
+    for (let step = 0; job.status === 'deleting' && step < 3; step++) job = await dto(await request(`${path}/advance`, session, { method: 'POST', body: {} }));
+    expect(job.status).toBe('deleted'); await dto(await request(path, session));
+    expect(await store.get('system/media_quota')).toMatchObject({ usedBytes: 0 });
+    expect((await request(`/api/v1/admin/media/${asset.id}/restore`, session, { method: 'POST', body: { expectedVersion: 4 } })).status).toBe(409);
+  });
+
+  it('rejects mutation field injection and clears a cancelled check so the same media can be checked afresh', async () => {
+    const asset = await seedAsset('cancel-http'), session = await login();
+    const rejected = await request(`/api/v1/admin/media/${asset.id}`, session, { method: 'PATCH', body: { expectedVersion: 1, category: 'fitness', lifecycle: 'deleted' } }); expect(rejected.status).toBe(422);
+    expect(await store.get(`media/${asset.id}`)).toEqual(asset);
+    await request(`/api/v1/admin/media/${asset.id}/trash`, session, { method: 'POST', body: { expectedVersion: 1 } });
+    const begin = async () => (await (await request(`/api/v1/admin/media/${asset.id}/purge-check`, session, { method: 'POST', body: { expectedVersion: 2 }, headers: { 'idempotency-key': crypto.randomUUID() } })).json() as { data: Omit<PurgeJob, 'keys'> }).data;
+    const old = await begin();
+    const cancelled = await (await request(`/api/v1/admin/media/purge-jobs/${old.id}/cancel`, session, { method: 'POST', body: {} })).json() as { data: Omit<PurgeJob, 'keys'> };
+    expect(cancelled.data.status).toBe('cancelled'); expect(cancelled.data).not.toHaveProperty('keys');
+    expect(await store.get(`media/${asset.id}`)).not.toHaveProperty('purgeJobId');
+    const fresh = await begin(); expect(fresh.id).not.toBe(old.id); expect(fresh.status).toBe('checking');
+  });
+});
 
 describe('HTTP authentication, moderation and optimistic updates', () => {
   it('persists and reloads incomplete drafts in every collection, but identifies missing fields before any candidate exists', async () => {
@@ -227,9 +361,20 @@ describe('HTTP authentication, moderation and optimistic updates', () => {
   it('keeps the Worker public entry point usable when credential JSON is structurally present but invalid', async () => {
     const ready = await readyCreation(); await api.releases.activate(ready.id, null);
     const env = { CONTENT: bucket, PUBLIC_ORIGIN: origin, BUILD_CODE_SHA: codeSha, FIREBASE_PROJECT_ID: '', FIRESTORE_DATABASE_ID: '', FIRESTORE_EDITION: 'standard', BUILD_REPOSITORY: 'test/example', BUILD_REF: 'refs/heads/test', GOOGLE_SERVICE_ACCOUNT: JSON.stringify({ project_id: '', client_email: '', private_key: '' }) } as unknown as ApiEnv;
-    const response = await worker.fetch(new Request(`${origin}/`) as Parameters<typeof worker.fetch>[0], env);
-    expect(response.status).toBe(200);
-    expect(await response.text()).toContain(ready.id);
+    const pending: Promise<unknown>[] = [];
+    vi.stubGlobal('caches', await mf.getCaches());
+    try {
+      const context: Parameters<typeof worker.fetch>[2] = {
+        waitUntil(promise) { pending.push(promise); }, passThroughOnException() {}, props: {},
+        get exports(): never { throw new Error('Unexpected test execution-context exports access'); },
+        get tracing(): never { throw new Error('Unexpected test execution-context tracing access'); },
+        abort(reason): never { throw reason; },
+      };
+      const response = await worker.fetch(new Request(`${origin}/`) as Parameters<typeof worker.fetch>[0], env, context);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain(ready.id);
+      await Promise.all(pending);
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it('rejects a session revoked while its provider check was still in flight', async () => {

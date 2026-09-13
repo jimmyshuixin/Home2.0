@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { BufferedTransaction, deserializeJson, listOptions, makeCursor, SerialQueue, StoreError, validateKey, validateKeys, type Store, type Transaction } from './types';
+import { mediaCursor, mediaQueryOptions, mediaSortValue, type MediaQueryOptions, type MediaQueryPage } from './media-query';
 
 const fileQueues = new Map<string, { queue: SerialQueue; references: number }>();
 function isBusy(error: unknown): boolean {
@@ -26,6 +27,7 @@ export class SqliteStore implements Store {
       this.#db.exec('PRAGMA journal_mode=WAL');
       this.#db.exec('PRAGMA synchronous=FULL');
       this.#db.exec('CREATE TABLE IF NOT EXISTS documents (collection TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (collection, id)) WITHOUT ROWID');
+      this.#db.function('media_sort', { deterministic: true }, (payload, sort) => mediaSortValue(JSON.parse(String(payload)), String(sort) as MediaQueryOptions['sort']));
       const canonical = path === ':memory:' ? null : realpathSync(path);
       this.#fileKey = canonical && process.platform === 'win32' ? canonical.toLowerCase() : canonical;
       if (this.#fileKey) {
@@ -80,6 +82,17 @@ export class SqliteStore implements Store {
           return { id: row.id, data: deserializeJson<T>(row.payload) };
         });
         return { items, nextCursor: rows.length > limit ? makeCursor(collection, items[items.length - 1]!.id) : null };
+      } catch (error) { throw storageError(error); }
+    });
+  }
+  queryMedia<T>(options: MediaQueryOptions): Promise<MediaQueryPage<T>> {
+    const { limit, after } = mediaQueryOptions(options), direction = options.direction === 'asc' ? 'ASC' : 'DESC', comparison = direction === 'ASC' ? '>' : '<';
+    return this.#queue.run(() => {
+      this.#assertOpen();
+      try {
+        const rows = this.#db.prepare(`SELECT id,payload,media_sort(payload,?) AS sort_value FROM documents WHERE collection='media_catalog' AND (?='' OR sort_value ${comparison} ?) ORDER BY sort_value COLLATE BINARY ${direction} LIMIT ?`).all(options.sort, after, after, limit + 1);
+        const items = rows.slice(0, limit).map(row => ({ id: String(row.id), data: deserializeJson<T>(String(row.payload)), sortValue: String(row.sort_value) }));
+        return { items, nextCursor: rows.length > limit ? mediaCursor(options, items.at(-1)!.sortValue) : null };
       } catch (error) { throw storageError(error); }
     });
   }

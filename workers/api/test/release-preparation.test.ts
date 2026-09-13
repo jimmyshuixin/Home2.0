@@ -61,7 +61,7 @@ async function candidate(count = 250): Promise<{ job: ReleaseJob; recordId: stri
   const record = await records.save('albums', AlbumDraftSchema, { title: 'Frozen original album', slug: 'test-album', photos: Array.from({ length: count }, (_, index) => ({ id: `photo-${index}`, assetId: `asset-${String(index).padStart(5, '0')}`, alt: `Test photo ${index}`, status: 'published' })) }, 'test-admin');
   operations = 0; batches = [];
   const job = await releases.create({ changes: [{ collection: 'albums', id: record.id, version: 1, action: 'publish' }], expectedReleaseId: null }, 'test-admin');
-  expect(operations).toBeLessThanOrEqual(12); expect(batches).toEqual([1, Math.min(count, 100)]);
+  expect(operations).toBeLessThanOrEqual(14); expect(batches).toEqual([1, Math.min(count, 100)]);
   await releases.claim(job.id, runId, codeSha);
   return { job, recordId: record.id };
 }
@@ -97,13 +97,14 @@ describe('cross-request asset preparation using real local R2 conditional writes
     await releases.noteDispatch(job.id, true);
     // Includes R2 + Firestore begin/read/commit protocol costs. The production
     // auth/provider path and one GitHub dispatch add their own bounded requests.
-    expect(operations).toBeLessThanOrEqual(16); expect(batches.filter(value => value > 0)).toEqual([50]);
+    // Two lifecycle-fence reads prevent a frozen candidate from racing purge.
+    expect(operations).toBeLessThanOrEqual(18); expect(batches.filter(value => value > 0)).toEqual([50]);
     const snapshot = await releases.snapshot(job.id);
     expect(snapshot.creations).toHaveLength(12); expect(snapshot.albums).toHaveLength(12); expect(snapshot.fitness.entries).toHaveLength(12); expect(snapshot.playlists).toHaveLength(12);
     expect(snapshot.settings.intro).toBe('Local test settings'); expect(snapshot.fitness.settings.startDate).toBeNull();
     operations = 0; batches = [];
     expect((await releases.create({ ...input, changes: [...changes].reverse() }, 'test-admin', key)).id).toBe(job.id);
-    expect(operations).toBe(4); expect(batches).toEqual([]);
+    expect(operations).toBe(5); expect(batches).toEqual([]);
     const concurrentKey = crypto.randomUUID();
     const [first, second] = await Promise.all([releases.create(input, 'test-admin', concurrentKey), releases.create(input, 'test-admin', concurrentKey)]);
     expect(first.id).toBe(second.id); expect(first.id).not.toBe(job.id);

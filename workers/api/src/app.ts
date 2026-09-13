@@ -8,6 +8,9 @@ import { Sessions, type Session } from './sessions';
 import { Records, readStatistics, writeStatisticsDelta, type DraftRecord } from './records';
 import { StoreError, type Store } from './store/types';
 import { Media, type MediaAsset } from './media';
+import { MediaLibrary, type PurgeJob } from './media-library';
+import type { PublicReadCache } from './public-read-cache';
+import { cachePublishedSection, type PublishedSection } from './public-data';
 import { Processing } from './processing';
 import { Releases, emptySnapshot, type Snapshot, type ReleaseJob, type ReleaseManifest } from './releases';
 import { renderPublic, serveObject, publicIndex } from './render';
@@ -16,8 +19,9 @@ export interface Runtime {
   allowedOrigins: string[]; privacySalt: string; adminUsername: string; codeSha: string;
   verifyRunner?: (request: Request) => Promise<{ runId: string; codeSha: string }>;
   dispatchBuild?: (job: ReleaseJob) => Promise<void>;
-  music?: (request: Request, snapshot: Snapshot, requestId: string) => Promise<Response>;
+  music?: (request: Request, snapshot: Snapshot, requestId: string, privateView?: boolean) => Promise<Response>;
   dispatchMedia?: (assetId: string) => Promise<void>;
+  publicReadCache?: PublicReadCache;
 }
 interface CommentRecord { id: string; nickname: string; body: string; targetType: 'guestbook' | 'creation' | 'album'; targetId: string | null; status: 'pending' | 'approved' | 'rejected' | 'hidden'; version: number; createdAt: string; updatedAt: string }
 type Context = { Variables: { requestId: string; session: Session; previewId: string | null } };
@@ -28,6 +32,8 @@ export function createApi(runtime: Runtime) {
   const app = new Hono<Context>(), sessions = new Sessions(runtime.store, runtime.auth, runtime.secureCookies, runtime.now), records = new Records(runtime.store, runtime.now), media = new Media(runtime.store, runtime.bucket, runtime.now), releases = new Releases(runtime.store, runtime.bucket, runtime.now, runtime.codeSha);
   const previewCookie = runtime.secureCookies ? '__Host-xvyin_preview' : 'xvyin_local_preview';
   const processing = new Processing(runtime.store, runtime.bucket, runtime.now);
+  const library = new MediaLibrary(runtime.store, runtime.bucket, runtime.now);
+  const publicPurge = ({ keys, ...job }: PurgeJob) => ({ ...job, totalKeys: keys.length });
   const response = (data: unknown, requestId: string, extra: Record<string, unknown> = {}, status = 200) => new Response(JSON.stringify({ data, meta: { requestId, schemaVersion: 1, ...extra } }), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
   const input = async (request: Request, max?: number) => { const value = await boundedJson(request, max); const problem = boundedTreeProblem(value, 24, 15000); assert(!problem, 'INVALID_CONTENT_TREE', 422, problem || '内容结构无效'); return value; };
   const ip = (request: Request) => request.headers.get('cf-connecting-ip') || 'local';
@@ -46,6 +52,14 @@ export function createApi(runtime: Runtime) {
       const published = live.find(item => item.id === record.id);
       return { ...record, visibility: published ? 'published' : record.lastPublishedRevisionId || record.visibility === 'hidden' ? 'hidden' : 'draft', lastPublishedRevisionId: published?.revisionId || record.lastPublishedRevisionId };
     });
+  };
+  const currentSection = async <K extends PublishedSection>(request: Request, requestId: string, section: K) => {
+    if (cookieValue(request, previewCookie)) { const snapshot = await currentSnapshot(request, requestId); return { releaseId: snapshot.releaseId, value: snapshot[section] }; }
+    const active = await releases.active(), wanted = request.headers.get('x-xvyin-release');
+    assert(!wanted || wanted === 'unpublished' || wanted === active?.value.releaseId, 'RELEASE_CHANGED', 409, '网站已更新，请刷新页面');
+    if (!active) return { releaseId: 'unpublished', value: emptySnapshot('unpublished')[section] };
+    const releaseId = active.value.releaseId;
+    return { releaseId, value: await cachePublishedSection(runtime.publicReadCache, releaseId, section, () => releases.snapshot(releaseId)) };
   };
   app.use('*', async (c, next) => {
     const requestId = crypto.randomUUID(); c.set('requestId', requestId);
@@ -101,15 +115,29 @@ export function createApi(runtime: Runtime) {
     app.patch(`/api/v1/admin/settings/${name}`, async c => { const values = saveInput.parse(await input(c.req.raw)); if (name === 'fitness') fitnessDayCount(FitnessSettingsDraftSchema.parse(values.draft).startDate, runtime.now()); return response(await records.save('settings', schema, values.draft, c.get('session').uid, name, values.expectedVersion), c.get('requestId')); });
   }
   app.get('/api/v1/admin/revisions/:id', async c => { IdSchema.parse(c.req.param('id')); const value = await runtime.store.get(`revisions/${c.req.param('id')}`); assert(value, 'NOT_FOUND', 404, '历史版本不存在'); return response(value, c.get('requestId')); });
-  app.get('/api/v1/admin/media', async c => { const page = await runtime.store.list<MediaAsset>('media', { limit: 50, cursor: c.req.query('cursor') }); return response(page.items.map(item => item.data), c.get('requestId'), { nextCursor: page.nextCursor, quota: await media.quota() }); });
-  app.get('/api/v1/admin/media/:id', async c => { const id = IdSchema.parse(c.req.param('id')), asset = await runtime.store.get<MediaAsset>(`media/${id}`); assert(asset, 'NOT_FOUND', 404, '媒体不存在'); return response(asset, c.get('requestId')); });
-  app.post('/api/v1/admin/media/uploads', async c => response(media.publicUpload(await media.start(await input(c.req.raw, 4096), c.get('session').uid)), c.get('requestId'), {}, 201));
+  app.get('/api/v1/admin/media', async c => {
+    const query = c.req.query(); const page = await library.list({ ...query, ...(query.limit ? { limit: Number(query.limit) } : {}) });
+    return response(page.items, c.get('requestId'), { nextCursor: page.nextCursor, scanned: page.scanned, catalogReady: page.catalogReady, quota: await media.quota() });
+  });
+  app.get('/api/v1/admin/media/catalog', async c => response(await library.catalogStatus(), c.get('requestId')));
+  app.post('/api/v1/admin/media/catalog/advance', async c => response(await library.advanceCatalog(), c.get('requestId')));
+  app.get('/api/v1/admin/media/duplicates', async c => response(await library.findDuplicate({ ...c.req.query(), bytes: Number(c.req.query('bytes')) } as Parameters<MediaLibrary['findDuplicate']>[0]), c.get('requestId')));
+  app.get('/api/v1/admin/media/purge-jobs/:jobId', async c => response(publicPurge(await library.getPurge(c.req.param('jobId'), c.get('session').uid)), c.get('requestId')));
+  for (const action of ['advance', 'confirm', 'cancel'] as const) app.post(`/api/v1/admin/media/purge-jobs/:jobId/${action}`, async c => {
+    const method = { advance: 'advancePurge', confirm: 'confirmPurge', cancel: 'cancelPurge' }[action] as 'advancePurge' | 'confirmPurge' | 'cancelPurge';
+    return response(publicPurge(await library[method](c.req.param('jobId'), c.get('session').uid)), c.get('requestId'));
+  });
+  app.patch('/api/v1/admin/media/:id', async c => response(await library.update(c.req.param('id'), await input(c.req.raw, 4096) as Parameters<MediaLibrary['update']>[1]), c.get('requestId')));
+  for (const action of ['trash', 'restore'] as const) app.post(`/api/v1/admin/media/:id/${action}`, async c => response(await library[action](c.req.param('id'), await input(c.req.raw, 4096) as { expectedVersion: number }, c.get('session').uid), c.get('requestId')));
+  app.post('/api/v1/admin/media/:id/purge-check', async c => response(publicPurge(await library.startPurge(c.req.param('id'), await input(c.req.raw, 4096) as { expectedVersion: number }, c.get('session').uid, c.req.header('idempotency-key') || '')), c.get('requestId'), {}, 201));
+  app.get('/api/v1/admin/media/:id', async c => { const id = IdSchema.parse(c.req.param('id')), asset = await runtime.store.get<MediaAsset>(`media/${id}`); assert(asset && !['purging', 'deleted'].includes(asset.lifecycle || ''), 'NOT_FOUND', 404, '媒体不存在或已删除'); return response(asset, c.get('requestId')); });
+  app.post('/api/v1/admin/media/uploads', async c => response(media.publicUpload(await media.start(await input(c.req.raw, 4096), c.get('session').uid, c.req.header('idempotency-key'))), c.get('requestId'), {}, 201));
   app.get('/api/v1/admin/media/uploads/:id', async c => { IdSchema.parse(c.req.param('id')); return response(media.publicUpload(await media.get(c.req.param('id'), c.get('session').uid)), c.get('requestId')); });
   app.put('/api/v1/admin/media/uploads/:id/parts/:part', async c => { IdSchema.parse(c.req.param('id')); return response(await media.part(c.req.param('id'), Number(c.req.param('part')), c.req.raw, c.get('session').uid), c.get('requestId')); });
   app.post('/api/v1/admin/media/uploads/:id/complete', async c => { IdSchema.parse(c.req.param('id')); const asset = await media.complete(c.req.param('id'), c.get('session').uid); if (runtime.dispatchMedia && asset.status === 'processing') await runtime.dispatchMedia(asset.id); return response(asset, c.get('requestId')); });
   app.post('/api/v1/admin/media/uploads/:id/abort', async c => { IdSchema.parse(c.req.param('id')); await media.abort(c.req.param('id'), c.get('session').uid); return response({ aborted: true }, c.get('requestId')); });
   app.get('/api/v1/admin/media/:id/:role', async c => {
-    IdSchema.parse(c.req.param('id')); const asset = await runtime.store.get<MediaAsset>(`media/${c.req.param('id')}`); assert(asset, 'NOT_FOUND', 404, '媒体不存在');
+    IdSchema.parse(c.req.param('id')); const asset = await runtime.store.get<MediaAsset>(`media/${c.req.param('id')}`); assert(asset && !['purging', 'deleted'].includes(asset.lifecycle || ''), 'NOT_FOUND', 404, '媒体不存在或已删除');
     const role = c.req.param('role'), variant = asset.variants.find(v => v.role === role);
     assert(role === 'original' || variant, 'NOT_FOUND', 404, '媒体版本不存在');
     const result = await serveObject(runtime.bucket, variant?.key || asset.originalKey, c.req.raw, variant?.mime || 'application/octet-stream', true, 'private');
@@ -191,17 +219,17 @@ export function createApi(runtime: Runtime) {
     const statistics = await readStatistics(runtime.store), counts = statistics?.counts;
     return response({ content: { creations: counts?.creations ?? null, albums: counts?.albums ?? null, fitness: counts?.fitness ?? null, playlists: counts?.playlists ?? null }, moderation: { pending: counts?.commentsPending ?? null, contacts: counts?.contacts ?? null }, media: await media.quota(), traffic: null, statisticsInitializedAt: statistics?.initializedAt ?? null, activeReleaseId: (await releases.active())?.value.releaseId || null }, c.get('requestId'));
   });
-  for (const name of ['creations', 'albums', 'playlists', 'fitness', 'settings']) app.get(`/api/v1/${name}`, async c => { const snapshot = await currentSnapshot(c.req.raw, c.get('requestId')); return response(snapshot[name as keyof Snapshot], c.get('requestId'), { releaseId: snapshot.releaseId }); });
+  for (const name of ['creations', 'albums', 'playlists', 'fitness', 'settings'] as const) app.get(`/api/v1/${name}`, async c => { const section = await currentSection(c.req.raw, c.get('requestId'), name); return response(section.value, c.get('requestId'), { releaseId: section.releaseId }); });
   app.get('/api/v1/media/:id/:role', async c => {
     const previewId = cookieValue(c.req.raw, previewCookie); if (previewId) { await sessions.require(c.req.raw); const job = await releases.get(previewId); assert(['ready', 'live', 'superseded'].includes(job.status), 'PREVIEW_NOT_READY', 409, '预览尚未准备好'); }
     const releaseId = previewId || (await releases.active())?.value.releaseId;
     assert(releaseId, 'NOT_FOUND', 404, '公开媒体不存在');
     const role = MediaVariantRoleSchema.safeParse(c.req.param('role')); assert(role.success, 'NOT_FOUND', 404, '公开媒体不存在');
-    const variant = await publicIndex<ReleaseManifest['assets'][string]>(releases, releaseId, `media/${IdSchema.parse(c.req.param('id'))}/${role.data}`);
-    assert(variant, 'NOT_FOUND', 404, '公开媒体不存在'); const result = await serveObject(runtime.bucket, variant.key, c.req.raw, variant.mime, Boolean(previewId), releaseId);
+    const variant = await publicIndex<ReleaseManifest['assets'][string]>(releases, releaseId, `media/${IdSchema.parse(c.req.param('id'))}/${role.data}`, previewId ? undefined : runtime.publicReadCache);
+    assert(variant, 'NOT_FOUND', 404, '公开媒体不存在'); const result = await serveObject(runtime.bucket, variant.key, c.req.raw, variant.mime, Boolean(previewId), releaseId, runtime.publicReadCache);
     if (c.req.param('role') === 'download') result.headers.set('content-disposition', 'attachment'); return result;
   });
-  app.all('/api/v1/music/*', async c => { assert(runtime.music, 'MUSIC_NOT_CONFIGURED', 503, '音乐服务暂未配置'); return runtime.music(c.req.raw, await currentSnapshot(c.req.raw, c.get('requestId')), c.get('requestId')); });
+  app.all('/api/v1/music/*', async c => { assert(runtime.music, 'MUSIC_NOT_CONFIGURED', 503, '音乐服务暂未配置'); const section = await currentSection(c.req.raw, c.get('requestId'), 'playlists'); return runtime.music(c.req.raw, { ...emptySnapshot(section.releaseId), playlists: section.value }, c.get('requestId'), Boolean(cookieValue(c.req.raw, previewCookie))); });
   const runner = async (request: Request) => {
     if (request.headers.has('authorization')) { assert(runtime.verifyRunner, 'RUNNER_UNAUTHORIZED', 401, '构建执行器未配置'); return runtime.verifyRunner(request); }
     assertOrigin(request, runtime.allowedOrigins); await sessions.require(request, true);
@@ -251,7 +279,7 @@ export function createApi(runtime: Runtime) {
   app.notFound(async c => {
     if (c.req.path.startsWith('/api/')) return c.json({ error: { code: 'NOT_FOUND', message: '接口不存在' }, meta: { requestId: c.get('requestId'), schemaVersion: 1 } }, 404);
     const previewId = cookieValue(c.req.raw, previewCookie); if (previewId) await sessions.require(c.req.raw);
-    return renderPublic(releases, c.req.raw, previewId);
+    return renderPublic(releases, c.req.raw, previewId, previewId ? undefined : runtime.publicReadCache);
   });
   return { app, sessions, records, media, processing, releases, response, input };
 }

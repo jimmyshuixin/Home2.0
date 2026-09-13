@@ -5,6 +5,7 @@ import type { DraftRecord } from './records';
 import type { MediaAsset } from './media';
 import { ApiError, assert } from './errors';
 import { sha256 } from './security';
+import { assertMediaFence, availableFence, MEDIA_FENCE_KEY, type MediaFence } from './media-lifecycle';
 export type Published<T> = T & { id: string; revisionId: string; publishedAt: string };
 export interface Snapshot {
   schemaVersion: 1; releaseId: string; settings: SiteSettings;
@@ -13,7 +14,9 @@ export interface Snapshot {
   playlists: Array<Published<PlaylistDraft>>; assets: PublicMediaAsset[]; routeAliases: Record<string, string>;
 }
 export const ReleaseChangeSchema = z.object({ collection: z.enum(['creations', 'albums', 'fitness', 'playlists', 'settings']), id: IdSchema, version: z.number().int().positive(), action: z.enum(['publish', 'hide']) }).strict();
-export const ReleaseInputSchema = z.object({ changes: z.array(ReleaseChangeSchema).min(1).max(50), expectedReleaseId: IdSchema.nullable() }).strict();
+export const ReleaseInputSchema = z.object({ changes: z.array(ReleaseChangeSchema).max(50), expectedReleaseId: IdSchema.nullable(), rebuildPublished: z.literal(true).optional() }).strict().superRefine((input, context) => {
+  if (input.rebuildPublished ? input.changes.length !== 0 : input.changes.length === 0) context.addIssue({ code: 'custom', path: ['changes'], message: input.rebuildPublished ? '重建公开页面不能同时包含草稿变更' : '请至少选择一项需要发布的变更' });
+});
 export type ReleaseChange = z.infer<typeof ReleaseChangeSchema>;
 export interface ReleaseCandidate {
   collection: ReleaseChange['collection']; id: string; title: string; version: number;
@@ -31,6 +34,8 @@ interface ManifestPreparationState { inputSha256: string; snapshotSha256: string
 export interface ReleaseJob {
   id: string; status: 'queued' | 'building' | 'ready' | 'activating' | 'live' | 'superseded' | 'failed' | 'reconciling';
   changes: ReleaseChange[]; previousReleaseId: string | null; previousEtag: string | null; createdAt: string; updatedAt: string;
+  /** An explicit code rebuild of the previous immutable public snapshot, without draft changes. */
+  rebuildPublished?: true;
   authorUid: string; codeSha: string; runId: string | null; manifestSha256: string | null; snapshotSha256: string;
   selectedRevisionIds: Record<string, string>; error?: { code: string; message: string };
   /** false means snapshotSha256 hashes the immutable source, not an SSG-ready snapshot yet. */
@@ -159,13 +164,14 @@ export class Releases {
     return { items, nextCursor, activeReleaseId };
   }
   async create(input: unknown, uid: string, idempotencyKey?: string): Promise<ReleaseJob> {
-    const { changes, expectedReleaseId } = ReleaseInputSchema.parse(input);
+    const mediaEpoch = availableFence(await this.store.get<MediaFence>(MEDIA_FENCE_KEY), this.now());
+    const { changes, expectedReleaseId, rebuildPublished } = ReleaseInputSchema.parse(input);
     let id = crypto.randomUUID() as string, at = new Date(this.now()).toISOString();
     if (idempotencyKey !== undefined) {
       z.string().uuid().parse(idempotencyKey);
       changes.sort((a, b) => `${a.collection}/${a.id}`.localeCompare(`${b.collection}/${b.id}`));
       const requestId = await sha256(`release:${uid}:${idempotencyKey}`);
-      const inputSha256 = await sha256(JSON.stringify({ changes, expectedReleaseId }));
+      const inputSha256 = await sha256(JSON.stringify({ changes, expectedReleaseId, ...(rebuildPublished ? { rebuildPublished } : {}) }));
       const request = await this.store.transaction(async tx => {
         const existing = await tx.get<ReleaseRequest>(`release_requests/${requestId}`);
         assert(!existing || existing.inputSha256 === inputSha256, 'IDEMPOTENCY_CONFLICT', 409, '这次发布请求的内容已改变，请重新确认发布清单');
@@ -180,11 +186,12 @@ export class Releases {
     }
     const active = await this.active();
     assert((active?.value.releaseId || null) === expectedReleaseId, 'RELEASE_CONFLICT', 409, '线上版本已改变，请刷新后再发布');
+    assert(!rebuildPublished || active, 'REBUILD_REQUIRES_PUBLISHED', 409, '还没有公开版本，请先选择完整内容正常发布');
     assert(/^[a-f0-9]{40}$/u.test(this.codeSha), 'BUILD_NOT_CONFIGURED', 503, '发布代码版本尚未配置');
     assert(new Set(changes.map(change => `${change.collection}/${change.id}`)).size === changes.length, 'DUPLICATE_CHANGE', 422, '同一内容不能重复出现在发布清单');
     const snapshot = active ? await this.snapshot(active.value.releaseId) : emptySnapshot(id); snapshot.releaseId = id;
     const selectedRevisionIds: Record<string, string> = {};
-    const selected = await this.store.getMany<DraftRecord>(changes.map(change => `${change.collection}/${change.id}`));
+    const selected = rebuildPublished ? [] : await this.store.getMany<DraftRecord>(changes.map(change => `${change.collection}/${change.id}`));
     for (const [index, change] of changes.entries()) {
       const key = `${change.collection}/${change.id}`, record = selected[index];
       assert(record && record.version === change.version, 'VERSION_CONFLICT', 409, '草稿版本已改变，请刷新后生成预览');
@@ -213,20 +220,20 @@ export class Releases {
     for (const entries of [snapshot.creations, snapshot.albums]) assert(new Set(entries.map(item => item.slug)).size === entries.length, 'SLUG_CONFLICT', 409, '公开地址重复，请修改 slug');
     assert(snapshot.playlists.filter(p => p.enabled && p.isDefault).length <= 1, 'DEFAULT_PLAYLIST_CONFLICT', 422, '只能有一个启用的默认歌单');
     const routes = new Set([...snapshot.creations.map(v => `/creations/${v.slug}`), ...snapshot.albums.map(v => `/photography/${v.slug}`)]);
-    snapshot.routeAliases = Object.fromEntries(Object.entries(snapshot.routeAliases).filter(([from, to]) => !routes.has(from) && routes.has(to)));
+    if (!rebuildPublished) snapshot.routeAliases = Object.fromEntries(Object.entries(snapshot.routeAliases).filter(([from, to]) => !routes.has(from) && routes.has(to)));
     // Preserve the already loaded published projection; never re-read the full previous snapshot.
     const ids = [...collectAssetIds(snapshot)], wanted = new Set(ids), previousAssets = snapshot.assets;
-    const previousIds = new Set(previousAssets.map(asset => asset.id)), freshIds = ids.filter(assetId => !previousIds.has(assetId));
-    snapshot.assets = previousAssets.filter(asset => wanted.has(asset.id));
+    const previousIds = new Set(previousAssets.map(asset => asset.id)), freshIds = rebuildPublished ? [] : ids.filter(assetId => !previousIds.has(assetId));
+    if (!rebuildPublished) snapshot.assets = previousAssets.filter(asset => wanted.has(asset.id));
     const batchIds = freshIds.slice(0, RELEASE_ASSET_BATCH_SIZE);
-    const assets = await this.store.getMany<MediaAsset>(batchIds.map(assetId => `media/${assetId}`));
+    const assets = rebuildPublished ? [] : await this.store.getMany<MediaAsset>(batchIds.map(assetId => `media/${assetId}`));
     snapshot.assets.push(...batchIds.map((assetId, index) => publicAsset(assets[index], assetId)));
     const snapshotPrepared = freshIds.length === batchIds.length;
     const json = JSON.stringify(snapshot), snapshotSha256 = await sha256(json);
     assert(new TextEncoder().encode(json).length <= 10 * 1024 * 1024, 'SNAPSHOT_TOO_LARGE', 422, '发布快照超过当前上限，请减少单次公开内容');
     await immutableJson(this.bucket, `${snapshotPrepared ? 'private-snapshots' : 'private-snapshot-sources'}/${id}.json`, snapshot, 10 * 1024 * 1024);
-    const job: ReleaseJob = { id, status: 'queued', changes, previousReleaseId: active?.value.releaseId || null, previousEtag: active?.etag || null, authorUid: uid, createdAt: at, updatedAt: at, codeSha: this.codeSha, runId: null, manifestSha256: null, snapshotSha256, selectedRevisionIds, snapshotPrepared, preparedAssetCount: snapshot.assets.length, assetCount: ids.length };
-    return this.store.transaction(async tx => { const existing = await tx.get<ReleaseJob>(`releases/${id}`); if (existing) return existing; tx.put(`releases/${id}`, job); return job; });
+    const job: ReleaseJob = { id, status: 'queued', changes, ...(rebuildPublished ? { rebuildPublished } : {}), previousReleaseId: active?.value.releaseId || null, previousEtag: active?.etag || null, authorUid: uid, createdAt: at, updatedAt: at, codeSha: this.codeSha, runId: null, manifestSha256: null, snapshotSha256, selectedRevisionIds, snapshotPrepared, preparedAssetCount: snapshot.assets.length, assetCount: ids.length };
+    return this.store.transaction(async tx => { const existing = await tx.get<ReleaseJob>(`releases/${id}`); if (existing) return existing; await assertMediaFence(tx, this.now(), mediaEpoch); tx.put(`releases/${id}`, job); return job; });
   }
   async retryDispatchJob(id: string): Promise<ReleaseJob> {
     const job = await this.get(id);

@@ -13,6 +13,7 @@ const busy = ref(false), loading = ref(true), complete = ref(false), issue = ref
 const section = ref<'changes' | 'history'>('changes'), filter = ref('pending'), search = ref('');
 const nextJobCursor = ref<string>(), loadingMore = ref(false), pollFailed = ref(false);
 const sendingKey = ref(crypto.randomUUID());
+const rebuildKey = ref(crypto.randomUUID()), confirmingActivation = ref(false);
 let timer: ReturnType<typeof setTimeout> | undefined;
 let alive = true, loadSequence = 0;
 const controller = new AbortController();
@@ -24,6 +25,7 @@ const filtered = computed(() => candidates.value.filter(item => (choices.value[c
 const sortedJobs = computed(() => [...jobs.value].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')));
 const signature = computed(() => releaseSignature(selectedChanges.value, activeId.value));
 watch(signature, () => { sendingKey.value = crypto.randomUUID(); });
+watch(activeId, () => { rebuildKey.value = crypto.randomUUID(); });
 const labels: Record<string, string> = { live: '正在使用', activating: '正在切换', reconciling: '正在确认切换结果', queued: '等待生成', building: '正在生成页面', rendering: '正在生成页面', validating: '正在校验', uploading: '正在保存页面', ready: '待预览与确认', active: '正在使用', published: '已发布', failed: '发布失败', cancelled: '已取消', superseded: '已有更新版本' };
 function statusLabel(job: ReleaseJob) { if (job.status === 'live' && job.id !== activeId.value) return '历史版本'; return job.status === 'live' && releaseNeedsPolling(job) ? '已上线，正在同步记录' : labels[job.status] ?? job.status; }
 function updateJob(job: ReleaseJob) { const index = jobs.value.findIndex(value => value.id === job.id); if (index >= 0) jobs.value[index] = job; else jobs.value.unshift(job); }
@@ -86,7 +88,7 @@ function poll() {
     finally { poll(); }
   }, 2500);
 }
-function selectJob(job: ReleaseJob) { selected.value = job; section.value = 'history'; issue.value = ''; pollFailed.value = false; poll(); }
+function selectJob(job: ReleaseJob) { selected.value = job; section.value = 'history'; issue.value = ''; confirmingActivation.value = false; pollFailed.value = false; poll(); }
 async function refreshSelected() {
   if (!selected.value) return;
   busy.value = true; issue.value = '';
@@ -110,6 +112,15 @@ async function retrySelected() {
   catch (error) { issue.value = errorMessage(error); }
   finally { busy.value = false; }
 }
+async function rebuild() {
+  if (!activeId.value || busy.value) return;
+  busy.value = true; issue.value = '';
+  try {
+    const result = await api.request<ReleaseJob>('/admin/releases', { method: 'POST', body: { changes: [], rebuildPublished: true, expectedReleaseId: activeId.value }, idempotencyKey: rebuildKey.value });
+    selected.value = result.data; updateJob(result.data); section.value = 'history'; pollFailed.value = false; poll();
+  } catch (error) { issue.value = errorMessage(error); }
+  finally { busy.value = false; }
+}
 async function preview() {
   if (!selected.value) return;
   busy.value = true; issue.value = '';
@@ -126,12 +137,11 @@ async function preview() {
 }
 async function activate() {
   if (!selected.value) return;
-  const fresh = selected.value.status === 'ready';
-  if (!window.confirm(fresh ? `确认一次发布这 ${selected.value.changes?.length ?? 0} 项改动？网站将整体切换到已预览的候选版本。` : '确认恢复这个历史版本？公开内容会整体恢复到当时的版本，当前草稿仍保留。')) return;
+  if (!confirmingActivation.value) { confirmingActivation.value = true; return; }
   busy.value = true; issue.value = '';
   try {
     const result = await api.request<ReleaseJob>(`/admin/releases/${selected.value.id}/activate`, { method: 'POST', body: { expectedReleaseId: activeId.value } });
-    selected.value = result.data; await loadJobs(); updateJob(result.data); emit('activated'); complete.value = false; pollFailed.value = false; poll();
+    selected.value = result.data; confirmingActivation.value = false; await loadJobs(); updateJob(result.data); emit('activated'); complete.value = false; pollFailed.value = false; poll();
   } catch (error) { issue.value = errorMessage(error); }
   finally { busy.value = false; }
 }
@@ -158,15 +168,17 @@ onBeforeUnmount(() => { alive = false; loadSequence++; controller.abort(); if (t
         </template>
       </section>
       <section v-else aria-label="发布记录">
-        <section v-if="selected" class="panel mt24"><div class="flex between"><h3>{{ selected.changes?.length ?? 0 }} 项改动的版本</h3><span class="badge">{{ statusLabel(selected) }}</span></div><p class="hint mt16">创建于 {{ dateTime(selected.createdAt) }}</p><details class="mt8"><summary class="hint">版本编号与变更范围</summary><p class="mono mt8">{{ selected.releaseId ?? selected.id }}</p><ul class="change-list"><li v-for="change in selected.changes" :key="changeKey(change)">{{ collectionLabels[change.collection as keyof typeof collectionLabels] ?? change.collection }} · {{ candidates.find(item => changeKey(item) === changeKey(change))?.title ?? change.id }} · 版本 {{ change.version }} · {{ change.action === 'hide' ? '隐藏' : '发布' }}</li></ul></details>
+        <div v-if="activeId" class="panel mt24"><h3>更新公开页面</h3><p class="hint mt8">用当前代码重新生成已公开的内容。未发布的草稿继续保留，生成后先预览再确认上线。</p><button class="mt16" type="button" :disabled="busy || loading" @click="rebuild">重新生成当前公开页面</button></div>
+        <div v-if="confirmingActivation && selected" class="notice mt24" role="alertdialog" aria-labelledby="activation-title"><h3 id="activation-title">确认切换公开版本</h3><p class="mt8">{{ selected.status === 'ready' ? '网站将整体切换到已预览的候选版本。' : '公开内容将恢复为所选历史版本，现有草稿继续保留。' }}</p><p v-if="!selected.changes?.length" class="hint mt8">本次仅更新页面构建，公开内容保持原样。</p><div class="flex mt16"><button type="button" class="primary" :disabled="busy" @click="activate">确认切换公开版本</button><button type="button" :disabled="busy" @click="confirmingActivation = false">取消</button></div></div>
+        <section v-if="selected" class="panel mt24"><div class="flex between"><h3>{{ selected.changes?.length ? selected.changes.length + ' 项改动的版本' : '公开页面重建' }}</h3><span class="badge">{{ statusLabel(selected) }}</span></div><p class="hint mt16">创建于 {{ dateTime(selected.createdAt) }}</p><details class="mt8"><summary class="hint">版本编号与变更范围</summary><p class="mono mt8">{{ selected.releaseId ?? selected.id }}</p><ul class="change-list"><li v-for="change in selected.changes" :key="changeKey(change)">{{ collectionLabels[change.collection as keyof typeof collectionLabels] ?? change.collection }} · {{ candidates.find(item => changeKey(item) === changeKey(change))?.title ?? change.id }} · 版本 {{ change.version }} · {{ change.action === 'hide' ? '隐藏' : '发布' }}</li></ul></details>
           <div v-if="selected.status === 'failed'" class="notice error mt16">{{ selected.error?.message ?? '候选版本未通过生成或校验，请检查内容与媒体后重新生成。' }}</div>
           <div v-if="selected.status === 'queued' && selected.dispatchState === 'unconfirmed'" class="notice error mt16"><p>发布任务已保存，尚未确认构建启动。重试会继续同一任务。</p><button type="button" :disabled="busy" @click="retrySelected">重新启动构建</button></div>
           <p v-if="selected.status === 'ready' && selected.previousReleaseId !== activeId" class="notice error mt16">此候选生成后已有其他版本上线。请返回改动清单，重新生成预览。</p>
-          <div v-if="['ready', 'live', 'superseded'].includes(selected.status)" class="flex mt24"><button type="button" :disabled="busy" @click="preview">打开私有预览 ↗</button><button type="button" class="primary" :disabled="busy || selected.id === activeId || selected.status === 'ready' && selected.previousReleaseId !== activeId" @click="activate">{{ selected.status === 'ready' ? `确认一次发布 ${selected.changes?.length ?? 0} 项` : '恢复此版本' }}</button></div>
+          <div v-if="['ready', 'live', 'superseded'].includes(selected.status)" class="flex mt24"><button type="button" :disabled="busy" @click="preview">打开私有预览 ↗</button><button type="button" class="primary" :disabled="busy || selected.id === activeId || selected.status === 'ready' && selected.previousReleaseId !== activeId" @click="activate">{{ selected.status === 'ready' ? (selected.changes?.length ? `确认一次发布 ${selected.changes.length} 项` : '发布重建页面') : '恢复此版本' }}</button></div>
           <p v-if="releaseNeedsPolling(selected)" class="hint mt16" role="status">{{ selected.status === 'live' ? `网站已更新，正在同步后台记录 ${selected.reconciledRecords ?? 0} / ${selected.changes?.length ?? 0}` : '后台正在生成和校验页面。可以关闭窗口，稍后从发布记录继续。' }}</p>
           <button v-if="pollFailed || selected.status === 'live' && releaseNeedsPolling(selected)" type="button" class="mt16" :disabled="busy" @click="refreshSelected">继续读取进度</button>
         </section>
-        <div class="flex between mt32"><h3>发布记录</h3><button type="button" :disabled="busy || loadingMore" @click="loadMoreJobs">{{ nextJobCursor ? '加载更多记录' : '刷新记录' }}</button></div><p class="hint mt8">当前公开版本：<span class="mono">{{ activeId ?? '尚未发布' }}</span></p><p v-if="loading" class="loading">正在读取发布记录…</p><div v-else-if="!jobs.length" class="empty mt16">还没有发布记录。</div><ul v-else class="release-list mt16"><li v-for="job in sortedJobs" :key="job.id"><button type="button" :class="{ selected: selected?.id === job.id }" @click="selectJob(job)"><span><strong>{{ job.changes?.length ?? 0 }} 项改动</strong><small>{{ dateTime(job.createdAt) }}</small></span><span class="badge">{{ statusLabel(job) }}</span></button></li></ul>
+        <div class="flex between mt32"><h3>发布记录</h3><button type="button" :disabled="busy || loadingMore" @click="loadMoreJobs">{{ nextJobCursor ? '加载更多记录' : '刷新记录' }}</button></div><p class="hint mt8">当前公开版本：<span class="mono">{{ activeId ?? '尚未发布' }}</span></p><p v-if="loading" class="loading">正在读取发布记录…</p><div v-else-if="!jobs.length" class="empty mt16">还没有发布记录。</div><ul v-else class="release-list mt16"><li v-for="job in sortedJobs" :key="job.id"><button type="button" :class="{ selected: selected?.id === job.id }" @click="selectJob(job)"><span><strong>{{ job.changes?.length ? job.changes.length + ' 项改动' : '公开页面重建' }}</strong><small>{{ dateTime(job.createdAt) }}</small></span><span class="badge">{{ statusLabel(job) }}</span></button></li></ul>
       </section>
     </div>
   </dialog>

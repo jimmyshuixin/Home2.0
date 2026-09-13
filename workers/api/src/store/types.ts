@@ -1,3 +1,4 @@
+import { mediaCatalog, type MediaQueryOptions, type MediaQueryPage } from './media-query';
 /** Private server-side storage. Callers never expose records without public projection. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export interface Transaction {
@@ -7,6 +8,7 @@ export interface Transaction {
   delete(key: string): void;
 }
 export interface Store {
+  queryMedia?<T>(options: MediaQueryOptions): Promise<MediaQueryPage<T>>;
   get<T>(key: string): Promise<T | null>;
   /** At most 100 keys. Results preserve input order and duplicate slots; missing records are null. */
   getMany<T>(keys: readonly string[]): Promise<Array<T | null>>;
@@ -138,8 +140,23 @@ export class BufferedTransaction implements Transaction {
     if (this.#reading) throw new StoreError('STORE_TRANSACTION_ORDER', '事务必须先等待全部读取完成');
     this.#writing = true;
   }
-  put(key: string, value: unknown): void { this.#startWrite(key); this.#writes.set(key, { key, payload: serializeJson(value) }); }
-  delete(key: string): void { this.#startWrite(key); this.#writes.set(key, { key, payload: null }); }
+  put(key: string, value: unknown): void {
+    this.#startWrite(key); this.#writes.set(key, { key, payload: serializeJson(value) });
+    if (key.startsWith('media/')) {
+      const projected = mediaCatalog(value);
+      if (projected) {
+        const catalogKey = `media_catalog/${key.slice(6)}`; this.#writes.set(catalogKey, { key: catalogKey, payload: projected.lifecycle === 'deleted' ? null : serializeJson(projected) });
+        const metadata = projected.metadata as Record<string, unknown> | undefined;
+        if (projected.status === 'ready' && projected.lifecycle === 'active' && typeof metadata?.sha256 === 'string' && /^[a-f0-9]{64}$/u.test(metadata.sha256)) {
+          const hashKey = `media_hashes/${metadata.sha256}`; this.#writes.set(hashKey, { key: hashKey, payload: serializeJson({ assetId: projected.id, kind: projected.kind, bytes: projected.originalBytes }) });
+        }
+      }
+    }
+  }
+  delete(key: string): void {
+    this.#startWrite(key); this.#writes.set(key, { key, payload: null });
+    if (key.startsWith('media/')) { const catalogKey = `media_catalog/${key.slice(6)}`; this.#writes.set(catalogKey, { key: catalogKey, payload: null }); }
+  }
   finish(): BufferedWrite[] {
     this.#assertOpen(); this.#closed = true;
     if (this.#reading) throw new StoreError('STORE_TRANSACTION_ORDER');

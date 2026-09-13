@@ -4,8 +4,11 @@ import { assert, ApiError } from './errors';
 import { readBoundedJson } from './store/google-oauth';
 import type { Snapshot } from './releases';
 import { qqBrowserPage } from './qq-browser';
+import { cacheRead, cacheWrite, publicCacheKey, type PublicReadCache } from './public-read-cache';
 const musicId = z.string().regex(/^[A-Za-z0-9_.:-]{1,160}$/u);
 const providerTrack = z.object({ id: z.union([z.string(), z.number()]).transform(String), songmid: z.string().optional(), title: z.string().optional(), name: z.string().optional(), author: z.union([z.string(), z.array(z.string())]).optional(), artist: z.union([z.string(), z.array(z.string())]).optional(), pic: z.string().optional(), cover: z.string().optional(), lrc: z.string().optional() });
+const providerTracks = z.array(providerTrack).max(1000);
+const PLAYLIST_CACHE_SECONDS = 300, PLAYLIST_CACHE_BYTES = 1024 * 1024;
 type DiagnosticStage = 'provider_fetch' | 'provider_decode' | 'resolver_shape' | 'native_fetch' | 'native_decode' | 'native_result' | 'native_destination';
 type DiagnosticDetails = { httpStatus?: number | null; accepted?: boolean; legacyDescriptor?: boolean; embeddedLegacyDescriptor?: boolean; nativeCalled?: boolean; schemaValid?: boolean; qqCode?: number | null; qqRequestCode?: number | null; qqItemCodes?: Array<number | null>; hasEntries?: boolean; hasPurl?: boolean };
 function diagnose(requestId: string | undefined, stage: DiagnosticStage, details: DiagnosticDetails): void {
@@ -52,7 +55,7 @@ function legacyQQDescriptor(value: unknown, songmid: string): boolean {
   } catch { return false; }
 }
 /** Only the site's configured published playlists can be resolved; never an arbitrary URL proxy. */
-export function createMusicHandler(origin: string, fetcher: typeof fetch = globalThis.fetch.bind(globalThis), siteOrigin = 'https://test.xvyin.com') {
+export function createMusicHandler(origin: string, fetcher: typeof fetch = globalThis.fetch.bind(globalThis), siteOrigin = 'https://test.xvyin.com', publicCache?: PublicReadCache) {
   assert(origin === 'https://music.xvyin.com', 'MUSIC_NOT_CONFIGURED', 503, '音乐来源未配置');
   async function upstream(server: string, type: string, id: string, requestId?: string): Promise<unknown> {
     const url = new URL(origin); url.search = new URLSearchParams({ server, type, id: musicId.parse(id), limit: 'all' }).toString();
@@ -105,6 +108,34 @@ export function createMusicHandler(origin: string, fetcher: typeof fetch = globa
     }
     diagnose(requestId, 'native_destination', { accepted: false }); return undefined;
   }
+  async function publishedTracks(snapshot: Snapshot, playlist: Snapshot['playlists'][number]) {
+    // Called only after the current snapshot confirmed this configuration is
+    // published/enabled. A warm upstream list never grants publication access.
+    // Preview callers omit publicCache. Playback URLs and nonce pages never
+    // pass through this cache; only validated provider catalogue data does.
+    const key = publicCache && publicCacheKey(publicCache, snapshot.releaseId, 'index', `music-playlist/${playlist.id}/${playlist.source}/${playlist.sourceId}`);
+    const hit = key && await cacheRead(publicCache, key);
+    if (hit) {
+      const expires = Number(hit.headers.get('x-xvyin-music-expires')), now = Date.now();
+      if (hit.status === 200 && Number.isSafeInteger(expires) && expires > now && expires <= now + PLAYLIST_CACHE_SECONDS * 1000 + 1000) {
+        try {
+          const parsed = providerTracks.safeParse(JSON.parse(await boundedText(hit, PLAYLIST_CACHE_BYTES)));
+          if (parsed.success) return parsed.data;
+        } catch { /* A damaged or oversized cache entry falls back to the provider. */ }
+      } else await hit.body?.cancel().catch(() => {});
+    }
+    const parsed = providerTracks.safeParse(await upstream(playlist.source, 'playlist', playlist.sourceId!));
+    assert(parsed.success, 'MUSIC_UNAVAILABLE', 503, '音乐平台返回了暂不兼容的歌单');
+    if (publicCache && key) {
+      const json = JSON.stringify(parsed.data), bytes = new TextEncoder().encode(json).byteLength;
+      if (bytes <= PLAYLIST_CACHE_BYTES) await cacheWrite(publicCache, key, new Response(json, { headers: {
+        'content-type': 'application/json; charset=utf-8', 'content-length': String(bytes),
+        'cache-control': `public, max-age=${PLAYLIST_CACHE_SECONDS}`,
+        'x-xvyin-music-expires': String(Date.now() + PLAYLIST_CACHE_SECONDS * 1000),
+      } }));
+    }
+    return parsed.data;
+  }
   return async (request: Request, snapshot: Snapshot, requestId: string): Promise<Response> => {
     assert(request.method === 'GET' || request.method === 'HEAD', 'METHOD_NOT_ALLOWED', 405, '音乐接口只接受读取');
     const match = /^\/api\/v1\/music\/(playlist|stream|lyrics|cover|browser)\/([^/]+)(?:\/([^/]+))?$/u.exec(new URL(request.url).pathname);
@@ -118,8 +149,7 @@ export function createMusicHandler(origin: string, fetcher: typeof fetch = globa
       return json(playlist.tracks.map(track => ({ ...track, url: track.assetId ? `/api/v1/media/${track.assetId}/playback` : undefined, coverUrl: track.coverAssetId ? `/api/v1/media/${track.coverAssetId}/thumb` : undefined })));
     }
     assert(playlist.sourceId, 'MUSIC_NOT_CONFIGURED', 503, '外部歌单地址尚未设置');
-    const parsedTracks = z.array(providerTrack).max(1000).safeParse(await upstream(playlist.source, 'playlist', playlist.sourceId));
-    assert(parsedTracks.success, 'MUSIC_UNAVAILABLE', 503, '音乐平台返回了暂不兼容的歌单'); const tracks = parsedTracks.data;
+    const tracks = await publishedTracks(snapshot, playlist);
     if (mode === 'playlist') return json(tracks.filter(track => musicId.safeParse(track.id).success).map(track => ({ id: track.id, title: (track.title || track.name || '未命名曲目').slice(0, 240), artist: [track.author || track.artist || ''].flat().join(' / ').slice(0, 240), url: `/api/v1/music/stream/${playlist.id}/${encodeURIComponent(track.id)}`, ...(playlist.source === 'tencent' && /^[A-Za-z0-9]{1,80}$/u.test(track.songmid || track.id) ? { playback: { kind: 'qq-anonymous', songmid: track.songmid || track.id }, sourceUrl: `https://y.qq.com/n/ryqq/songDetail/${encodeURIComponent(track.songmid || track.id)}` } : {}), coverUrl: playlist.source === 'tencent' && qqCover(track.pic || track.cover) ? `/api/v1/music/cover/${playlist.id}/${encodeURIComponent(track.id)}` : publicMediaUrl(track.pic || track.cover), lyrics: track.lrc?.startsWith('[') ? track.lrc.slice(0, 100000) : '', lyricsUrl: `/api/v1/music/lyrics/${playlist.id}/${encodeURIComponent(track.id)}` })));
     const track = tracks.find(item => item.id === trackId); assert(track, 'NOT_FOUND', 404, '曲目不在公开歌单中');
     if (mode === 'browser') {

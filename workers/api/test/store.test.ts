@@ -26,6 +26,16 @@ describe.each(['memory', 'sqlite'] as const)('%s Store semantic contract', kind 
   });
   afterEach(async () => { await close(); });
 
+  it('keeps media catalog and hash projections atomic, sorted and stable across cursor pages', async () => {
+    const base = { kind: 'image', originalBytes: 20, status: 'ready', createdAt: '2026-09-13T00:00:00.000Z', variants: [], metadata: { sha256: 'a'.repeat(64) } };
+    await store.transaction(async tx => { tx.put('media/b', { ...base, id: 'b', originalName: '同名.jpg' }); tx.put('media/a', { ...base, id: 'a', originalName: '同名.jpg' }); tx.put('media/c', { ...base, id: 'c', originalName: 'AAA.jpg', originalBytes: 30 }); });
+    const first = await store.queryMedia!<{ id: string }>({ sort: 'name', direction: 'asc', limit: 2 }); expect(first.items.map(row => row.id)).toEqual(['c', 'a']); expect(first.nextCursor).toBeTruthy();
+    const second = await store.queryMedia!<{ id: string }>({ sort: 'name', direction: 'asc', limit: 2, cursor: first.nextCursor! }); expect(second.items.map(row => row.id)).toEqual(['b']); expect(second.nextCursor).toBeNull();
+    expect((await store.queryMedia!({ sort: 'size', direction: 'desc' })).items.map(row => row.id)).toEqual(['c', 'b', 'a']);
+    expect(await store.get(`media_hashes/${'a'.repeat(64)}`)).toMatchObject({ assetId: 'c', bytes: 30 });
+    await expect(store.transaction(async tx => { tx.put('media/d', { ...base, id: 'd', originalName: 'deleted.jpg' }); throw new Error('Local rollback'); })).rejects.toThrow(); expect(await store.get('media_catalog/d')).toBeNull();
+  });
+
   it('commits multiple writes together and rolls back all of them if the callback fails', async () => {
     await expect(store.transaction(async tx => { tx.put('entries/a', { value: 1 }); tx.put('entries/b', { value: 2 }); throw new Error('business failure'); })).rejects.toThrow('business failure');
     expect(await store.get('entries/a')).toBeNull();

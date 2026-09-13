@@ -1,8 +1,11 @@
 import data from '#site-snapshot'
 import type { ProviderRef } from '@xvyin/contracts'
 import type { SiteSnapshot, Variant, Creation } from './models'
+import { imageSourceSet } from './image-variants'
 export type * from './models'
 export const site = data as SiteSnapshot
+const assetsById = new Map(site.assets.map(asset => [asset.id, asset]))
+export function assetSrcSet(id?: string | null): string | undefined { return id ? imageSourceSet(assetsById.get(id)?.variants || []) : undefined }
 export function safeUrl(value?: string | null): string | undefined {
   if (!value || /[\u0000-\u0020\\]/.test(value)) return undefined
   if (value.startsWith('#')) return value
@@ -10,7 +13,7 @@ export function safeUrl(value?: string | null): string | undefined {
   try { const parsed = new URL(value); return parsed.protocol === 'https:' && !parsed.username && !parsed.password ? value : undefined } catch { return undefined }
 }
 export function assetVariant(id?: string | null, role = 'content'): Variant | undefined {
-  const asset = site.assets.find((item) => item.id === id)
+  const asset = id ? assetsById.get(id) : undefined
   const variant = asset?.variants.find((item) => item.role === role) || (['content', 'large', 'thumb', 'poster'].includes(role) ? asset?.variants.find((item) => ['content', 'large', 'thumb'].includes(item.role)) : undefined)
   return variant && safeUrl(variant.url) ? variant : undefined
 }

@@ -1,4 +1,4 @@
-export interface Envelope<T> { data: T; meta: { requestId: string; schemaVersion: number; nextCursor?: string; releaseId?: string | null; activeReleaseId?: string | null; previewReleaseId?: string | null; quota?: { limitBytes: number; usedBytes: number; reservedBytes: number } } }
+export interface Envelope<T> { data: T; meta: { requestId: string; schemaVersion: number; nextCursor?: string; releaseId?: string | null; activeReleaseId?: string | null; previewReleaseId?: string | null; catalogReady?: boolean; scanned?: number; quota?: { limitBytes: number; usedBytes: number; reservedBytes: number } } }
 export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly requestId?: string, readonly fields?: Record<string, string[]>) { super(message); this.name = 'ApiError'; }
 }
@@ -41,7 +41,7 @@ export interface DraftRecord<T = Record<string, unknown>> {
   draftRevisionId: string; lastPublishedRevisionId: string | null; createdAt: string; updatedAt: string;
 }
 export type Collection = 'creations' | 'albums' | 'fitness' | 'playlists';
-export interface MediaItem { id: string; kind: 'image' | 'audio' | 'video' | 'file'; originalName?: string; originalBytes: number; processingStatus?: string; status?: string; previewUrl?: string; metadata?: { width?: number; height?: number }; variants: { role: string; url?: string; width?: number; height?: number }[]; error?: { code: string; message: string } }
+export interface MediaItem { id: string; kind: 'image' | 'audio' | 'video' | 'file'; originalName?: string; originalBytes: number; totalBytes?: number; version?: number; category?: string; lifecycle?: 'active' | 'trash' | 'purging' | 'deleted'; purgeJobId?: string; createdAt?: string; updatedAt?: string; processingStatus?: string; status?: string; previewUrl?: string; metadata?: { width?: number; height?: number }; variants: { role: string; url?: string; width?: number; height?: number }[]; error?: { code: string; message: string } }
 export function mediaPreview(item: MediaItem): string | undefined {
   if ((item.processingStatus ?? item.status) !== 'ready') return;
   const variant = item.variants.find(value => ['thumb', 'content'].includes(value.role)) ?? item.variants[0];

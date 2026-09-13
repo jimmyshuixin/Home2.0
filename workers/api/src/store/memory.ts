@@ -1,4 +1,5 @@
 import { BufferedTransaction, deserializeJson, listOptions, makeCursor, SerialQueue, serializeJson, validateKey, validateKeys, type Store, type Transaction } from './types';
+import { mediaCursor, mediaQueryOptions, mediaSortValue, type MediaQueryOptions, type MediaQueryPage } from './media-query';
 
 /** Unit-test adapter only. Production and local development must select persistent storage. */
 export class MemoryStore implements Store {
@@ -16,6 +17,16 @@ export class MemoryStore implements Store {
     return this.#queue.run(() => checked.map(key => {
       const value = this.#records.get(key); return value === undefined ? null : deserializeJson<T>(value);
     }));
+  }
+  queryMedia<T>(options: MediaQueryOptions): Promise<MediaQueryPage<T>> {
+    const { limit, after } = mediaQueryOptions(options), direction = options.direction === 'asc' ? 1 : -1;
+    return this.#queue.run(() => {
+      const rows = [...this.#records.entries()].filter(([key]) => key.startsWith('media_catalog/')).map(([key, payload]) => {
+        const data = deserializeJson<Record<string, unknown>>(payload); return { id: key.slice(14), data: data as T, sortValue: mediaSortValue(data, options.sort) };
+      }).filter(row => !after || (row.sortValue > after ? 1 : row.sortValue < after ? -1 : 0) * direction > 0)
+        .sort((a, b) => (a.sortValue < b.sortValue ? -1 : a.sortValue > b.sortValue ? 1 : 0) * direction).slice(0, limit + 1);
+      const items = rows.slice(0, limit); return { items, nextCursor: rows.length > limit ? mediaCursor(options, items.at(-1)!.sortValue) : null };
+    });
   }
   list<T>(collection: string, options?: { limit?: number; cursor?: string }): Promise<{ items: { id: string; data: T }[]; nextCursor: string | null }> {
     const { limit, after } = listOptions(collection, options);

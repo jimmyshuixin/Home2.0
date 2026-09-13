@@ -24,6 +24,8 @@ npm run dev:admin
 
 ## 本地执行内容发布
 
+仅更新页面代码、复用当前公开内容时，管理员可向 `POST /api/v1/admin/releases` 发送 `{ "rebuildPublished": true, "changes": [], "expectedReleaseId": "当前公开版本ID" }`，并使用新的 UUID `idempotency-key`。服务器要求已有公开版本且 ID 一致；普通发布仍至少选择一项变更，重建不能夹带草稿变更。重建冻结当前公开快照，保留内容的版本、发布日期、设置与媒体投影，不读取未发布草稿。领取、构建、预览、激活仍使用同一个执行器和工作流；不会自动切换公开版本。
+
 使用完整仓库、已安装锁定依赖的 Node 环境，在私有文件中保存当前管理员的两个短期会话字段：`cookie` 和 `csrfToken`。Cookie 值必须是实际登录产生的 `__Host-xvyin_session=…`，不能放密码、Firebase ID token 或服务账号密钥。会话文件放在忽略的 `.private-build/` 中；Linux/macOS 必须 `chmod 600`，Windows 使用仅账户可读的目录权限。会话失效后重新登录并更新此文件。
 
 ```powershell

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FirestoreStore, type FirestoreConfig } from '../src/store/firestore';
 import { UnconfiguredStore } from '../src/store/unconfigured';
+import { mediaSortValue } from '../src/store/media-query';
 
 const config: FirestoreConfig = { projectId: 'xvyin-contract-test', databaseId: '(default)', edition: 'standard' };
 const parent = 'projects/xvyin-contract-test/databases/(default)/documents';
@@ -15,6 +16,35 @@ beforeEach(() => { vi.spyOn(console, 'error').mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('Firestore REST protocol without remote access', () => {
+  it('queries the media catalog with one single-field ordered request and resumes its exact stable cursor', async () => {
+    const rows = ['a', 'b', 'c'].map(id => ({ id, kind: 'image', originalName: '同名.jpg', originalBytes: 10, createdAt: '2026-09-13T00:00:00.000Z', variants: [] }));
+    const requests: Record<string, unknown>[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      const request = body(init); requests.push(request);
+      const query = request.structuredQuery as { orderBy: unknown[]; startAt?: { values: { stringValue: string }[] }; limit: number };
+      const after = query.startAt?.values[0]?.stringValue || '';
+      expect(query.orderBy).toEqual([{ field: { fieldPath: 'sort_name' }, direction: 'ASCENDING' }]);
+      expect(request).not.toHaveProperty('where');
+      return Response.json(rows.filter(row => mediaSortValue(row, 'name') > after).slice(0, query.limit).map(row => ({ document: { name: `${parent}/v3_media_catalog/${row.id}`, fields: { schema_version: { integerValue: '1' }, record_json: { stringValue: JSON.stringify(row) } } }, readTime: time })));
+    });
+    const store = new FirestoreStore(config, { getAccessToken: access, fetch: fetcher });
+    const first = await store.queryMedia({ sort: 'name', direction: 'asc', limit: 2 }); expect(first.items.map(row => row.id)).toEqual(['a', 'b']); expect(requests).toHaveLength(1);
+    const second = await store.queryMedia({ sort: 'name', direction: 'asc', limit: 2, cursor: first.nextCursor! }); expect(second.items.map(row => row.id)).toEqual(['c']); expect(second.nextCursor).toBeNull(); expect(requests).toHaveLength(2);
+  });
+  it('writes the media record, native single-field catalog keys and verified hash mapping in one commit', async () => {
+    const commits: Record<string, unknown>[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+      if (operation(url) === 'beginTransaction') return Response.json({ transaction: 'test-transaction' });
+      const request = body(init); commits.push(request);
+      return Response.json({ writeResults: (request.writes as unknown[]).map(() => ({})), commitTime: time });
+    });
+    const store = new FirestoreStore(config, { getAccessToken: access, fetch: fetcher }), value = { id: 'photo', kind: 'image', originalName: '照片.jpg', originalBytes: 30, variants: [], status: 'ready', createdAt: '2026-09-13T00:00:00.000Z', metadata: { sha256: 'b'.repeat(64) } };
+    await store.transaction(async tx => { tx.put('media/photo', value); });
+    const writes = commits[0]!.writes as { update: { name: string; fields: Record<string, { stringValue: string }> } }[];
+    expect(writes).toHaveLength(3); expect(writes[1]!.update.name).toBe(`${parent}/v3_media_catalog/photo`);
+    for (const sort of ['created', 'name', 'size'] as const) expect(writes[1]!.update.fields[`sort_${sort}`]?.stringValue).toBe(mediaSortValue(value, sort));
+    expect(writes[2]!.update.name).toBe(`${parent}/v3_media_hashes/${'b'.repeat(64)}`);
+  });
   it('rejects redirected document requests without forwarding the bearer token', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 307, headers: { Location: 'https://untrusted.invalid/documents' } }));
     await expect(new FirestoreStore(config, { getAccessToken: access, fetch: fetcher }).get('entries/test')).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE' });
