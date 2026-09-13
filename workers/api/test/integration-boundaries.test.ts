@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { AlbumDraftSchema, CreationDraftSchema, MEDIA_LIMITS } from '@xvyin/contracts';
+import { AlbumDraftSchema, CreationDraftSchema, HERO_TITLE, MEDIA_LIMITS, SiteSettingsSchema } from '@xvyin/contracts';
 import { createApi, type Runtime } from '../src/app';
 import { AuthError, type AuthProvider } from '../src/auth';
 import worker from '../src/index';
-import { installStatisticsProjection, statisticsRebuildPage, type StatisticsProjection } from '../src/records';
+import { installStatisticsProjection, statisticsRebuildPage, type DraftRecord, type StatisticsProjection } from '../src/records';
 import { Media, PART_SIZE, type MediaAsset, type Upload } from '../src/media';
 import { type ReleaseJob, type Snapshot } from '../src/releases';
 import { sha256 } from '../src/security';
@@ -67,14 +67,14 @@ async function seedAsset(id: string): Promise<MediaAsset> {
   await store.transaction(async tx => { tx.put(`media/${id}`, asset); });
   return asset;
 }
-async function finishBuild(job: ReleaseJob): Promise<ReleaseJob> {
+async function finishBuild(job: ReleaseJob, homeContent = `${HERO_TITLE} ${job.id} TEST CONTENT`): Promise<ReleaseJob> {
   const runId = `test-run-${job.id}`;
   let claimed = await api.releases.claim(job.id, runId, codeSha);
   for (let step = 0; claimed.snapshotPrepared === false && step < 100; step++) claimed = await api.releases.prepareSnapshot(job.id, runId);
   expect(claimed.snapshotPrepared).not.toBe(false);
   const snapshot = await api.releases.snapshot(job.id);
   const paths = ['/', '/about/', '/creations/', '/photography/', '/fitness/', '/guestbook/', '/contact/', ...snapshot.creations.map(value => `/creations/${value.slug}/`), ...snapshot.albums.map(value => `/photography/${value.slug}/`)];
-  const html = `<!doctype html><html><body>hello！i‘m 虚宁 ${job.id} TEST CONTENT</body></html>`;
+  const html = `<!doctype html><html><body>${homeContent}</body></html>`;
   const hash = await sha256(html), bytes = new TextEncoder().encode(html).length;
   const files = paths.map(path => ({ path: `${path}index.html`, sha256: hash, bytes, contentType: 'text/html; charset=utf-8' }));
   let manifest = await api.releases.registerManifest(job.id, runId, { files });
@@ -90,6 +90,21 @@ async function readyCreation(title = 'Integration test creation'): Promise<Relea
 }
 
 describe('HTTP authentication, moderation and optimistic updates', () => {
+  it('normalizes the legacy title on admin reads without changing the saved revision', async () => {
+    const session = await login();
+    const record = await api.records.save('settings', SiteSettingsSchema, { intro: 'Existing introduction' }, uid, 'site');
+    const legacy = { ...record, draft: { ...record.draft as Record<string, unknown>, heroTitle: 'hello！i‘m 虚宁' } };
+    await store.transaction(async tx => { tx.put('settings/site', legacy); });
+    const response = await request('/api/v1/admin/settings/site', session);
+    expect(response.status).toBe(200);
+    const { data } = await response.json() as { data: DraftRecord };
+    expect(data).toMatchObject({ version: record.version, draftRevisionId: record.draftRevisionId, draft: { heroTitle: HERO_TITLE, intro: 'Existing introduction' } });
+    expect(await store.get('settings/site')).toEqual(legacy);
+    const saved = await request('/api/v1/admin/settings/site', session, { method: 'PATCH', body: { draft: data.draft, expectedVersion: data.version } });
+    expect(saved.status).toBe(200);
+    expect(await store.get('settings/site')).toMatchObject({ version: record.version + 1, draft: { heroTitle: HERO_TITLE } });
+  });
+
   it('rejects unauthenticated and cross-origin mutations, and enforces CSRF on admin writes', async () => {
     expect((await request('/api/v1/admin/creations')).status).toBe(401);
     const session = await login();
@@ -209,6 +224,17 @@ describe('HTTP authentication, moderation and optimistic updates', () => {
     const page = await statisticsRebuildPage(store, 'creations');
     expect(page).toMatchObject({ count: 2, scanned: 2, nextCursor: null });
     await expect(installStatisticsProjection(store, projection!.counts, 1, instant)).rejects.toMatchObject({ code: 'VERSION_CONFLICT' });
+  });
+});
+
+describe('published homepage title integrity', () => {
+  it.each(['old title', 'missing name', 'missing release'])('rejects %s after validating uploaded file hashes', async defect => {
+    const record = await api.records.save('creations', CreationDraftSchema, creation('Title integrity fixture'), uid);
+    const job = await api.releases.create({ changes: [{ collection: 'creations', id: record.id, version: record.version, action: 'publish' }], expectedReleaseId: null }, uid);
+    const html = defect === 'old title' ? `hello！i‘m 虚宁 ${job.id}` : defect === 'missing name' ? `Hello! I am ${job.id}` : HERO_TITLE;
+    await expect(finishBuild(job, html)).rejects.toMatchObject({ code: 'BUILD_HTML_INVALID' });
+    expect((await api.releases.get(job.id)).status).toBe('building');
+    expect(await api.releases.active()).toBeNull();
   });
 });
 

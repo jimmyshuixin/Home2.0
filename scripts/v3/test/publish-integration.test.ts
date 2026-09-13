@@ -169,6 +169,10 @@ async function buildCandidate(job: ReleaseJob): Promise<ReleaseJob> {
   await writeFile(path, JSON.stringify(snapshot), { mode: 0o600 });
   await generateStatic(root, target, path, origin);
   const output = resolve(root, 'apps/web/.output/public'), manifest = await buildManifest(output, job.id);
+  const home = await readFile(resolve(output, 'index.html'), 'utf8');
+  expect(home).toContain('aria-label="Hello! I am 虚宁"');
+  expect(home).not.toContain('hello！i‘m');
+  expect(home).toContain(job.id);
   await writeFile(resolve(target, 'manifest.json'), JSON.stringify(manifest), { mode: 0o600 });
   await registerBuildManifest(client, manifest);
   for (const file of manifest.files) await client.request(`/file?path=${encodeURIComponent(file.path)}`, 'PUT', undefined, new Uint8Array(await readFile(resolve(output, decodeURIComponent(file.path).slice(1)))));

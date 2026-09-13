@@ -19,7 +19,9 @@ export const DEFAULT_NAVIGATION = [
 export const SocialLinkSchema = z.object({ id: IdSchema, label: plainText(40, 1), url: HttpsUrlSchema }).strict();
 const settingsShape = {
   siteTitle: plainText(80, 1).default('虚宁的个人网站'),
-  heroTitle: z.literal(HERO_TITLE).default(HERO_TITLE),
+  // Read existing V3 records without rewriting immutable published snapshots.
+  // Only the exact previous title is compatible; all other spellings stay invalid.
+  heroTitle: z.union([z.literal(HERO_TITLE), z.literal('hello！i‘m 虚宁')]).transform(() => HERO_TITLE).default(HERO_TITLE),
   intro: plainText(2000).default(''),
   about: RichTextDocumentSchema.default({ type: 'doc', content: [] }),
   avatarAssetId: IdSchema.nullable().default(null),

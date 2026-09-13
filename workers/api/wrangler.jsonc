@@ -8,7 +8,7 @@
   "observability": { "enabled": true, "head_sampling_rate": 0.1 },
   "r2_buckets": [{ "binding": "CONTENT", "bucket_name": "xvyin-v3-test-private" }],
   "vars": {
-    "PUBLIC_ORIGIN": "https://test.xvyin.com",
+    "PUBLIC_ORIGIN": "https://xvyin.com",
     "FIREBASE_PROJECT_ID": "home-60305",
     "FIRESTORE_DATABASE_ID": "(default)",
     "FIRESTORE_EDITION": "standard",

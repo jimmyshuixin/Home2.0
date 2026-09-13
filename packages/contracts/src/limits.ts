@@ -17,5 +17,5 @@ export const CONTENT_LIMITS = Object.freeze({
   commentCharacters: 500,
 });
 export const SCHEMA_VERSION = 1 as const;
-export const HERO_TITLE = 'hello！i‘m 虚宁' as const;
+export const HERO_TITLE = 'Hello! I am 虚宁' as const;
 export const FITNESS_TIMEZONE = 'Asia/Shanghai' as const;

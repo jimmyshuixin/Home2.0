@@ -81,9 +81,16 @@ describe('rich text and settings security boundaries', () => {
     expect(RichTextDocumentSchema.safeParse(cyclic).success).toBe(false);
   });
 
-  it('preserves the exact agreed Unicode title and refuses older spellings', () => {
+  it('uses the current title and normalizes only the exact previous V3 title', () => {
+    expect(HERO_TITLE).toBe('Hello! I am 虚宁');
     expect(SiteSettingsSchema.parse({}).heroTitle).toBe(HERO_TITLE);
-    expect(SiteSettingsSchema.safeParse({ heroTitle: "Hello! I'm 虚宁" }).success).toBe(false);
+    expect(SiteSettingsSchema.parse({ heroTitle: HERO_TITLE }).heroTitle).toBe(HERO_TITLE);
+    const old = { heroTitle: 'hello！i‘m 虚宁', intro: '真实已有简介' };
+    expect(SiteSettingsSchema.parse(old)).toMatchObject({ heroTitle: HERO_TITLE, intro: old.intro });
+    expect(old.heroTitle).toBe('hello！i‘m 虚宁');
+    for (const heroTitle of ["Hello! I'm 虚宁", 'hello！i‘m虚宁', 'Hello! I am', 'arbitrary title', null]) {
+      expect(SiteSettingsSchema.safeParse({ heroTitle }).success).toBe(false);
+    }
     expect(SiteSettingsSchema.safeParse({ secret: 'must never be public' }).success).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, AlbumDraftSchema, PlaylistDraftSchema, FitnessEntryDraftSchema, IdSchema, Sha256Schema, PublicMediaAssetSchema, deriveFormats, fitnessDayCount, type SiteSettings, type FitnessSettingsDraft, type CreationDraft, type AlbumDraft, type FitnessEntryDraft, type PlaylistDraft, type PublicMediaAsset } from '@xvyin/contracts';
+import { HERO_TITLE, SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, AlbumDraftSchema, PlaylistDraftSchema, FitnessEntryDraftSchema, IdSchema, Sha256Schema, PublicMediaAssetSchema, deriveFormats, fitnessDayCount, type SiteSettings, type FitnessSettingsDraft, type CreationDraft, type AlbumDraft, type FitnessEntryDraft, type PlaylistDraft, type PublicMediaAsset } from '@xvyin/contracts';
 import type { Store } from './store/types';
 import type { DraftRecord } from './records';
 import type { MediaAsset } from './media';
@@ -289,7 +289,7 @@ export class Releases {
       const next = { ...current, verifiedFileCount, verifiedIndexCount: indexed, indexCount: indices.length, updatedAt: new Date(this.now()).toISOString() }; tx.put(`releases/${id}`, next); return next;
     });
     const home = await this.bucket.get(`releases/${id}/files/index.html`); assert(home && home.size < 2 * 1024 * 1024, 'BUILD_HTML_INVALID', 422, '首页 HTML 无效');
-    const html = await home.text(); assert(html.includes('hello！i‘m') && html.includes('虚宁') && html.includes(id), 'BUILD_HTML_INVALID', 422, '首页未包含完整原文或发布版本');
+    const html = await home.text(); assert(html.includes(HERO_TITLE) && html.includes(id), 'BUILD_HTML_INVALID', 422, '首页未包含当前招呼语或发布版本');
     const json = JSON.stringify(manifest), manifestSha256 = await sha256(json);
     await this.bucket.put(`releases/${id}/manifest.json`, json, { onlyIf: { etagDoesNotMatch: '*' }, httpMetadata: { contentType: 'application/json' } });
     return this.store.transaction(async tx => {

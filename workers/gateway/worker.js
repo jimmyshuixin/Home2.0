@@ -2,6 +2,10 @@
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.hostname === 'test.xvyin.com') {
+      url.hostname = 'xvyin.com';
+      return Response.redirect(url.toString(), 308);
+    }
     if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
       const isStaticAsset = url.pathname.startsWith('/admin/assets/') || url.pathname.startsWith('/admin/fonts/');
       const path = isStaticAsset ? url.pathname : '/admin/';

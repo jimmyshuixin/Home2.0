@@ -44,7 +44,7 @@ describe('real checked-in legacy content, no network or output writes', () => {
       })) })
       expect(mapped.counts).toMatchObject({ readyDrafts: 7, blockedCandidates: 0 })
       const site = SiteSettingsSchema.parse(mapped.candidates.find(item => item.target === 'siteSettings')!.draft)
-      expect(site.heroTitle).toBe('hello！i‘m 虚宁')
+      expect(site.heroTitle).toBe('Hello! I am 虚宁')
       expect(site.intro).toBe('路漫漫其修远兮，吾将上下而求索。')
       expect(JSON.stringify(site.about)).toContain('你好！屏幕前的你。')
       expect(JSON.stringify(site.about)).toContain('https://www.bilibili.com/video/BV1Kj411g7Lu')

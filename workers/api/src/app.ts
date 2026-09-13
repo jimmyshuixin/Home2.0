@@ -94,7 +94,10 @@ export function createApi(runtime: Runtime) {
   }
   for (const name of ['site', 'fitness']) {
     const schema: z.ZodType = name === 'site' ? SiteSettingsSchema : FitnessSettingsDraftSchema;
-    app.get(`/api/v1/admin/settings/${name}`, async c => response(await runtime.store.get(`settings/${name}`) || { id: name, version: 0, draft: schema.parse({}), visibility: 'draft', draftRevisionId: null, lastPublishedRevisionId: null, createdAt: null, updatedAt: null }, c.get('requestId')));
+    app.get(`/api/v1/admin/settings/${name}`, async c => {
+      const record = await runtime.store.get<DraftRecord>(`settings/${name}`);
+      return response(record ? { ...record, draft: schema.parse(record.draft) } : { id: name, version: 0, draft: schema.parse({}), visibility: 'draft', draftRevisionId: null, lastPublishedRevisionId: null, createdAt: null, updatedAt: null }, c.get('requestId'));
+    });
     app.patch(`/api/v1/admin/settings/${name}`, async c => { const values = saveInput.parse(await input(c.req.raw)); if (name === 'fitness') fitnessDayCount(FitnessSettingsDraftSchema.parse(values.draft).startDate, runtime.now()); return response(await records.save('settings', schema, values.draft, c.get('session').uid, name, values.expectedVersion), c.get('requestId')); });
   }
   app.get('/api/v1/admin/revisions/:id', async c => { IdSchema.parse(c.req.param('id')); const value = await runtime.store.get(`revisions/${c.req.param('id')}`); assert(value, 'NOT_FOUND', 404, '历史版本不存在'); return response(value, c.get('requestId')); });

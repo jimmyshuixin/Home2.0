@@ -23,6 +23,12 @@ describe('public build input boundary', () => {
     expect(snapshot.settings.intro).toBe('')
     expect(snapshot.routeAliases).toEqual([{ oldPath: '/old', targetPath: '/creations/new' }])
   })
+  it('reads an old published greeting without mutating its immutable snapshot', () => {
+    const input = { ...empty(), settings: { heroTitle: 'hello！i‘m 虚宁', intro: 'Existing introduction' } }
+    const serialized = JSON.stringify(input)
+    expect(publicSnapshot(input).settings).toMatchObject({ heroTitle: 'Hello! I am 虚宁', intro: 'Existing introduction' })
+    expect(JSON.stringify(input)).toBe(serialized)
+  })
 })
 describe('actual media focus control', () => {
   it('pauses the previous element and never resumes it after the new one ends', () => {
