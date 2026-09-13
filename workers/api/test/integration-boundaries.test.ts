@@ -90,6 +90,58 @@ async function readyCreation(title = 'Integration test creation'): Promise<Relea
 }
 
 describe('HTTP authentication, moderation and optimistic updates', () => {
+  it('persists and reloads incomplete drafts in every collection, but identifies missing fields before any candidate exists', async () => {
+    const session = await login();
+    const drafts = {
+      creations: { title: 'Incomplete mixed media', blocks: [{ id: 'image', type: 'image' }, { id: 'audio', type: 'audio', title: '' }, { id: 'video', type: 'video', assetId: '' }] },
+      albums: { title: 'Incomplete photo essay', photos: [{ id: 'photo', assetId: '', alt: '', status: 'published' }] },
+      fitness: { title: 'Incomplete fitness record', entryDate: '', photos: [] },
+      playlists: { name: '', source: 'tencent', sourceId: '', tracks: [{ id: 'track', title: '', providerRef: { provider: 'tencent', contentId: '' } }] },
+    };
+    for (const [collection, draft] of Object.entries(drafts)) {
+      const saved = await request(`/api/v1/admin/${collection}`, session, { method: 'POST', body: { draft } });
+      expect(saved.status).toBe(201);
+      const record = (await saved.json() as { data: DraftRecord }).data;
+      const loaded = await request(`/api/v1/admin/${collection}/${record.id}`, session);
+      expect(loaded.status).toBe(200);
+      expect((await loaded.json() as { data: DraftRecord }).data).toEqual(record);
+      const failed = await request('/api/v1/admin/releases', session, { method: 'POST', body: { changes: [{ collection, id: record.id, version: 1, action: 'publish' }], expectedReleaseId: null } });
+      expect(failed.status).toBe(422);
+      const error = (await failed.json() as { error: { code: string; message: string; fields: Record<string, string[]> } }).error;
+      expect(error.code).toBe('PUBLISH_VALIDATION'); expect(error.message).toContain('草稿已保留');
+      expect(Object.keys(error.fields).length).toBeGreaterThan(0);
+      expect(await store.get(`${collection}/${record.id}`)).toEqual(record);
+    }
+    expect((await store.list('releases')).items).toHaveLength(0);
+    expect(await bucket.get('active-release.json')).toBeNull();
+  });
+
+  it('requires an explicit photo selection and keeps unfinished private photos out of the public snapshot', async () => {
+    const session = await login(); await seedAsset('photo-visible');
+    const draft = { title: 'Fitness photo selection test', entryDate: '2026-09-12', photos: [
+      { id: 'visible', assetId: 'photo-visible', alt: 'Synthetic test photo', status: 'draft' },
+      { id: 'unfinished', assetId: '', alt: '', status: 'draft' },
+      { id: 'hidden', assetId: '', alt: '', status: 'hidden' },
+    ] };
+    const saved = await request('/api/v1/admin/fitness', session, { method: 'POST', body: { draft } });
+    expect(saved.status).toBe(201);
+    const record = (await saved.json() as { data: DraftRecord }).data;
+    const rejected = await request('/api/v1/admin/releases', session, { method: 'POST', body: { changes: [{ collection: 'fitness', id: record.id, version: 1, action: 'publish' }], expectedReleaseId: null } });
+    expect(rejected.status).toBe(422);
+    expect(JSON.stringify(await rejected.json())).toContain('随本条记录发布');
+    draft.photos[0]!.status = 'published';
+    const changed = await request(`/api/v1/admin/fitness/${record.id}`, session, { method: 'PATCH', body: { draft, expectedVersion: 1 } });
+    expect(changed.status).toBe(200);
+    const created = await request('/api/v1/admin/releases', session, { method: 'POST', body: { changes: [{ collection: 'fitness', id: record.id, version: 2, action: 'publish' }], expectedReleaseId: null } });
+    expect(created.status).toBe(201);
+    const job = (await created.json() as { data: ReleaseJob }).data;
+    const snapshot = await api.releases.snapshot(job.id);
+    expect(snapshot.fitness.entries[0]?.photos.map(photo => photo.id)).toEqual(['visible']);
+    expect(snapshot.assets.map(asset => asset.id)).toEqual(['photo-visible']);
+    expect(await store.get(`fitness/${record.id}`)).toMatchObject({ version: 2, draft: { photos: expect.arrayContaining([{ ...draft.photos[1], photoDate: null, caption: '', sortOrder: 0, featured: false }]) } });
+    expect(await bucket.get('active-release.json')).toBeNull();
+  });
+
   it('normalizes the legacy title on admin reads without changing the saved revision', async () => {
     const session = await login();
     const record = await api.records.save('settings', SiteSettingsSchema, { intro: 'Existing introduction' }, uid, 'site');

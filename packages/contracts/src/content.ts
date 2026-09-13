@@ -101,17 +101,36 @@ export const ContentBlockSchema = z.discriminatedUnion('type', [
 ]);
 export type ContentBlock = z.infer<typeof ContentBlockSchema>;
 
+// Drafts retain unfinished fields as empty strings. Non-empty references still
+// use the same allowlists, while publication keeps the complete schemas above.
+export const DraftAssetIdSchema = z.union([z.literal(''), IdSchema]).default('');
+export const DraftProviderRefSchema = ProviderRefSchema.extend({ contentId: z.union([z.literal(''), ProviderRefSchema.shape.contentId]).default('') });
+export function atMostOneMediaSource(value: { assetId?: string; providerRef?: ProviderRef }, ctx: z.RefinementCtx) {
+  if (value.assetId && value.providerRef) ctx.addIssue({ code: 'custom', path: ['assetId'], message: '媒体只能选择本站文件或外部平台其中一种来源' });
+}
+const draftMediaSource = { assetId: DraftAssetIdSchema.optional(), providerRef: DraftProviderRefSchema.optional() };
+export const DraftContentBlockSchema = z.discriminatedUnion('type', [
+  RichTextBlockSchema,
+  ImageBlockSchema.extend({ assetId: DraftAssetIdSchema, alt: plainText(500).default('') }),
+  GalleryBlockSchema.extend({ items: z.array(GalleryItemSchema.extend({ assetId: DraftAssetIdSchema, alt: plainText(500).default('') })).max(100).default([]) }),
+  z.object({ ...AudioBlockSchema.shape, ...draftMediaSource, title: plainText(120).default('') }).strict().superRefine(atMostOneMediaSource),
+  z.object({ ...VideoBlockSchema.shape, ...draftMediaSource, posterAssetId: DraftAssetIdSchema }).strict().superRefine(atMostOneMediaSource),
+  FileBlockSchema.extend({ assetId: DraftAssetIdSchema, label: plainText(120).default('') }),
+  QuoteBlockSchema.extend({ text: plainText(5000, 0, false).default('') }),
+  CodeBlockSchema.extend({ language: z.union([z.literal(''), CodeBlockSchema.shape.language]).default(''), code: z.string().max(64_000).default('') }),
+]);
+
 export const CreationFormatSchema = z.enum(['text', 'audio', 'video']);
 export type CreationFormat = z.infer<typeof CreationFormatSchema>;
 export const CreationKindSchema = z.enum(['article', 'project', 'mixed']);
 const creationShape = {
   kind: CreationKindSchema.default('mixed'),
-  title: plainText(CONTENT_LIMITS.titleCharacters),
-  slug: z.union([z.literal(''), SlugSchema]),
+  title: plainText(CONTENT_LIMITS.titleCharacters).default(''),
+  slug: z.union([z.literal(''), SlugSchema]).default(''),
   summary: plainText(CONTENT_LIMITS.summaryCharacters).default(''),
   coverAssetId: IdSchema.nullable().optional(),
   tags: z.array(plainText(40, 1)).max(CONTENT_LIMITS.tags).default([]),
-  blocks: z.array(ContentBlockSchema).max(CONTENT_LIMITS.blocks).default([]),
+  blocks: z.array(DraftContentBlockSchema).max(CONTENT_LIMITS.blocks).default([]),
   seo: z.object({ title: plainText(120).optional(), description: plainText(300).optional() }).strict().default({}),
   sourceLinks: z.array(HttpsUrlSchema).max(20).default([]),
   featured: z.boolean().default(false),
@@ -126,7 +145,7 @@ function validateCreation(value: { blocks: ContentBlock[]; tags: string[] }, ctx
 }
 export const CreationDraftSchema = z.object(creationShape).strict().superRefine(validateCreation);
 export const CreationSaveInputSchema = z.object({ ...creationShape, expectedVersion: VersionSchema }).strict().superRefine(validateCreation);
-export const PublishableCreationSchema = CreationDraftSchema.superRefine((value, ctx) => {
+export const PublishableCreationSchema = z.object({ ...creationShape, blocks: z.array(ContentBlockSchema).max(CONTENT_LIMITS.blocks).default([]) }).strict().superRefine(validateCreation).superRefine((value, ctx) => {
   if (!value.title) ctx.addIssue({ code: 'custom', path: ['title'], message: '发布前请填写标题' });
   if (!value.slug) ctx.addIssue({ code: 'custom', path: ['slug'], message: '发布前请填写 slug' });
   const hasBody = value.blocks.some(block => {

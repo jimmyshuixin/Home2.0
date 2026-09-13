@@ -90,7 +90,7 @@ describe('anonymous submissions and other draft models', () => {
   it('keeps playlist references stable and excludes temporary playback URLs or account cookies', () => {
     const playlist = { name: '测试歌单', source: 'tencent', sourceId: '123', tracks: [] };
     expect(PlaylistDraftSchema.safeParse(playlist).success).toBe(true);
-    expect(PlaylistDraftSchema.safeParse({ ...playlist, sourceId: null }).success).toBe(false);
+    expect(PlaylistDraftSchema.safeParse({ ...playlist, sourceId: null }).success).toBe(true);
     expect(PlaylistDraftSchema.safeParse({ ...playlist, cookie: 'private' }).success).toBe(false);
     expect(PlaylistDraftSchema.safeParse({ ...playlist, tracks: [{ id: 'track_1', title: '测试曲目', url: 'https://temporary.example/song.mp3' }] }).success).toBe(false);
   });

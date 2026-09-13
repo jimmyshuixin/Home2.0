@@ -23,6 +23,16 @@ describe('public build input boundary', () => {
     expect(snapshot.settings.intro).toBe('')
     expect(snapshot.routeAliases).toEqual([{ oldPath: '/old', targetPath: '/creations/new' }])
   })
+  it('keeps incomplete drafts out of public builds even when the persistence schemas accept them', () => {
+    const published = { id: 'entry', revisionId: 'rev', publishedAt: '2026-09-12T00:00:00.000Z' }
+    const candidates = [
+      { ...empty(), creations: [{ ...published, title: 'Unfinished image', slug: 'unfinished', formats: ['text'], blocks: [{ id: 'image', type: 'image', assetId: '', alt: '' }] }] },
+      { ...empty(), albums: [{ ...published, title: 'Unfinished photo', slug: 'unfinished', photos: [{ id: 'photo', assetId: '', alt: '', status: 'published' }] }] },
+      { ...empty(), fitness: { settings: {}, entries: [{ ...published, title: 'Unfinished date', entryDate: '' }] } },
+      { ...empty(), playlists: [{ ...published, name: 'Unfinished playlist', source: 'tencent', sourceId: null }] },
+    ]
+    for (const candidate of candidates) expect(PublicSnapshotSchema.safeParse(candidate).success).toBe(false)
+  })
   it('reads an old published greeting without mutating its immutable snapshot', () => {
     const input = { ...empty(), settings: { heroTitle: 'hello！i‘m 虚宁', intro: 'Existing introduction' } }
     const serialized = JSON.stringify(input)

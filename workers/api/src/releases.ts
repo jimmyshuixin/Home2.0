@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { HERO_TITLE, SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, AlbumDraftSchema, PlaylistDraftSchema, FitnessEntryDraftSchema, IdSchema, Sha256Schema, PublicMediaAssetSchema, deriveFormats, fitnessDayCount, type SiteSettings, type FitnessSettingsDraft, type CreationDraft, type AlbumDraft, type FitnessEntryDraft, type PlaylistDraft, type PublicMediaAsset } from '@xvyin/contracts';
+import { HERO_TITLE, SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, PublishableAlbumSchema, PublishablePlaylistSchema, PublishableFitnessEntrySchema, IdSchema, Sha256Schema, PublicMediaAssetSchema, deriveFormats, fitnessDayCount, type SiteSettings, type FitnessSettingsDraft, type CreationDraft, type AlbumDraft, type FitnessEntryDraft, type PlaylistDraft, type PublicMediaAsset } from '@xvyin/contracts';
 import type { Store } from './store/types';
 import type { DraftRecord } from './records';
 import type { MediaAsset } from './media';
-import { assert } from './errors';
+import { ApiError, assert } from './errors';
 import { sha256 } from './security';
 export type Published<T> = T & { id: string; revisionId: string; publishedAt: string };
 export interface Snapshot {
@@ -46,6 +46,30 @@ export interface ReleaseJob {
   dispatchState?: 'confirmed' | 'unconfirmed';
 }
 interface ReleaseRequest { inputSha256: string; jobId: string; createdAt: string }
+function publicationDraft<T>(schema: z.ZodType<T>, record: DraftRecord, collection: string): T {
+  const draft = record.draft as Record<string, unknown>;
+  const section = ({ creations: '创作', albums: '摄影', fitness: '健身', playlists: '歌单' } as Record<string, string>)[collection] || collection;
+  const title = typeof draft.title === 'string' && draft.title || typeof draft.name === 'string' && draft.name || '未命名草稿';
+  if ((collection === 'albums' || collection === 'fitness') && Array.isArray(draft.photos) && draft.photos.length && !draft.photos.some(photo => photo?.status === 'published')) {
+    throw new ApiError('PUBLISH_VALIDATION', 422, `${section}「${title}」有照片，但没有选择任何随记录发布的照片；草稿已保留。`, { '照片发布状态': ['请将要公开的照片设为「随本条记录发布」，再生成预览。草稿和隐藏照片不会自动公开。'] });
+  }
+  // Only photos explicitly selected for this publication belong in the public
+  // projection. Incomplete private photos remain safely stored in the draft.
+  const input = collection === 'albums' || collection === 'fitness'
+    ? { ...draft, photos: Array.isArray(draft.photos) ? draft.photos.filter(photo => photo?.status === 'published') : draft.photos }
+    : draft;
+  const parsed = schema.safeParse(input);
+  if (parsed.success) return parsed.data;
+  const labels: Record<string, string> = { title: '标题', name: '歌单名称', slug: '链接名称', entryDate: '记录归属日期', blocks: '内容块', items: '图片', photos: '待发布照片', tracks: '曲目', assetId: '媒体文件', posterAssetId: '视频封面', alt: '替代文字', providerRef: '外部来源', contentId: '内容 ID', sourceId: '歌单 ID', label: '附件名称', language: '代码语言', code: '代码内容', text: '引用内容' };
+  const fields: Record<string, string[]> = {};
+  for (const issue of parsed.error.issues) {
+    const field = issue.path.map(part => typeof part === 'number' ? `第 ${part + 1} 项` : labels[String(part)] || String(part)).join(' · ') || '内容';
+    let value: unknown = input;
+    for (const part of issue.path) value = value && typeof value === 'object' ? (value as Record<PropertyKey, unknown>)[part] : undefined;
+    (fields[field] ||= []).push(value === '' || value === null || value === undefined ? '发布前请补齐此项' : issue.message);
+  }
+  throw new ApiError('PUBLISH_VALIDATION', 422, `${section}「${title}」尚未满足发布条件；草稿已保留，请补齐后再生成预览。`, fields);
+}
 export const BuildManifestInputSchema = z.object({ files: z.array(z.object({
   path: z.string().regex(/^\/[A-Za-z0-9_\-./%]+$/u).max(500).refine(v => !v.includes('..') && !v.includes('//') && !/%(?:2f|5c|2e|00)/iu.test(v)),
   sha256: Sha256Schema, bytes: z.number().int().positive().max(25 * 1024 * 1024),
@@ -174,16 +198,16 @@ export class Releases {
       const common = { id: change.id, revisionId: record.draftRevisionId, publishedAt: at };
       if (change.collection === 'creations') {
         const old = snapshot.creations.find(item => item.id === change.id); snapshot.creations = snapshot.creations.filter(item => item.id !== change.id);
-        if (change.action === 'publish') { const draft = PublishableCreationSchema.parse(record.draft); snapshot.creations.push({ ...draft, ...common, formats: deriveFormats(draft) }); if (old && old.slug !== draft.slug) snapshot.routeAliases[`/creations/${old.slug}`] = `/creations/${draft.slug}`; }
+        if (change.action === 'publish') { const draft = publicationDraft(PublishableCreationSchema, record, change.collection); snapshot.creations.push({ ...draft, ...common, formats: deriveFormats(draft) }); if (old && old.slug !== draft.slug) snapshot.routeAliases[`/creations/${old.slug}`] = `/creations/${draft.slug}`; }
       } else if (change.collection === 'albums') {
         const old = snapshot.albums.find(item => item.id === change.id); snapshot.albums = snapshot.albums.filter(item => item.id !== change.id);
-        if (change.action === 'publish') { const draft = AlbumDraftSchema.parse(record.draft); assert(draft.title && draft.slug, 'PUBLISH_VALIDATION', 422, '摄影集发布前需要标题与地址'); snapshot.albums.push({ ...draft, photos: draft.photos.filter(p => p.status === 'published'), ...common }); if (old && old.slug !== draft.slug) snapshot.routeAliases[`/photography/${old.slug}`] = `/photography/${draft.slug}`; }
+        if (change.action === 'publish') { const draft = publicationDraft(PublishableAlbumSchema, record, change.collection); snapshot.albums.push({ ...draft, ...common }); if (old && old.slug !== draft.slug) snapshot.routeAliases[`/photography/${old.slug}`] = `/photography/${draft.slug}`; }
       } else if (change.collection === 'fitness') {
         snapshot.fitness.entries = snapshot.fitness.entries.filter(item => item.id !== change.id);
-        if (change.action === 'publish') { const draft = FitnessEntryDraftSchema.parse(record.draft); assert(draft.title, 'PUBLISH_VALIDATION', 422, '健身记录发布前需要标题'); snapshot.fitness.entries.push({ ...draft, photos: draft.photos.filter(p => p.status === 'published'), ...common }); }
+        if (change.action === 'publish') { const draft = publicationDraft(PublishableFitnessEntrySchema, record, change.collection); snapshot.fitness.entries.push({ ...draft, ...common }); }
       } else {
         snapshot.playlists = snapshot.playlists.filter(item => item.id !== change.id);
-        if (change.action === 'publish') snapshot.playlists.push({ ...PlaylistDraftSchema.parse(record.draft), ...common });
+        if (change.action === 'publish') snapshot.playlists.push({ ...publicationDraft(PublishablePlaylistSchema, record, change.collection), ...common });
       }
     }
     for (const entries of [snapshot.creations, snapshot.albums]) assert(new Set(entries.map(item => item.slug)).size === entries.length, 'SLUG_CONFLICT', 409, '公开地址重复，请修改 slug');

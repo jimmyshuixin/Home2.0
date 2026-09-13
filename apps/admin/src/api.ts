@@ -41,7 +41,7 @@ export interface DraftRecord<T = Record<string, unknown>> {
   draftRevisionId: string; lastPublishedRevisionId: string | null; createdAt: string; updatedAt: string;
 }
 export type Collection = 'creations' | 'albums' | 'fitness' | 'playlists';
-export interface MediaItem { id: string; kind: 'image' | 'audio' | 'video' | 'file'; originalName?: string; originalBytes: number; processingStatus?: string; status?: string; previewUrl?: string; metadata?: { width?: number; height?: number }; variants: { role: string; url?: string }[]; error?: { code: string; message: string } }
+export interface MediaItem { id: string; kind: 'image' | 'audio' | 'video' | 'file'; originalName?: string; originalBytes: number; processingStatus?: string; status?: string; previewUrl?: string; metadata?: { width?: number; height?: number }; variants: { role: string; url?: string; width?: number; height?: number }[]; error?: { code: string; message: string } }
 export function mediaPreview(item: MediaItem): string | undefined {
   if ((item.processingStatus ?? item.status) !== 'ready') return;
   const variant = item.variants.find(value => ['thumb', 'content'].includes(value.role)) ?? item.variants[0];

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, AlbumDraftSchema, AlbumPhotoSchema, FitnessEntryDraftSchema, FitnessPhotoDraftSchema, PlaylistDraftSchema, PublicMediaAssetSchema, IdSchema, UtcTimestampSchema, CreationFormatSchema, SafeHrefSchema } from '@xvyin/contracts'
+import { SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, PublishableAlbumSchema, PublishableFitnessEntrySchema, PublishablePhotoSchema, PublishablePlaylistSchema, PublicMediaAssetSchema, IdSchema, UtcTimestampSchema, CreationFormatSchema, SafeHrefSchema } from '@xvyin/contracts'
 import type { SiteSnapshot } from './models'
 const published = { id: IdSchema, revisionId: IdSchema, publishedAt: UtcTimestampSchema }
 // Shared strict schemas reject unrecognized/private fields at every boundary.
@@ -7,9 +7,9 @@ const published = { id: IdSchema, revisionId: IdSchema, publishedAt: UtcTimestam
 export const PublicSnapshotSchema = z.object({
   schemaVersion: z.literal(1), releaseId: IdSchema, settings: SiteSettingsSchema,
   creations: z.array(PublishableCreationSchema.safeExtend({ ...published, formats: z.array(CreationFormatSchema) })),
-  albums: z.array(AlbumDraftSchema.safeExtend({ ...published, photos: z.array(AlbumPhotoSchema.safeExtend({ status: z.literal('published') })) })),
-  fitness: z.object({ settings: FitnessSettingsDraftSchema, entries: z.array(FitnessEntryDraftSchema.safeExtend({ ...published, photos: z.array(FitnessPhotoDraftSchema.safeExtend({ status: z.literal('published') })) })) }).strict(),
-  playlists: z.array(PlaylistDraftSchema.safeExtend(published)), assets: z.array(PublicMediaAssetSchema),
+  albums: z.array(PublishableAlbumSchema.safeExtend({ ...published, photos: z.array(PublishablePhotoSchema.safeExtend({ status: z.literal('published') })) })),
+  fitness: z.object({ settings: FitnessSettingsDraftSchema, entries: z.array(PublishableFitnessEntrySchema.safeExtend({ ...published, photos: z.array(PublishablePhotoSchema.safeExtend({ status: z.literal('published') })) })) }).strict(),
+  playlists: z.array(PublishablePlaylistSchema.safeExtend(published)), assets: z.array(PublicMediaAssetSchema),
   routeAliases: z.record(SafeHrefSchema, SafeHrefSchema)
 }).strict()
 export function publicSnapshot(input?: unknown): SiteSnapshot {

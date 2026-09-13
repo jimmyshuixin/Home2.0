@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { IdSchema, plainText, requireUniqueIds, SlugSchema, SortOrderSchema, UtcTimestampSchema, VersionSchema } from './common';
-import { ProviderRefSchema } from './content';
+import { atMostOneMediaSource, DraftAssetIdSchema, DraftProviderRefSchema, ProviderRefSchema } from './content';
 import { CalendarDateSchema, fitnessDayCount } from './dates';
 import { CONTENT_LIMITS, FITNESS_TIMEZONE } from './limits';
 
@@ -45,13 +45,14 @@ const photoDraftShape = {
   featured: z.boolean().default(false),
   status: VisibilitySchema.default('draft'),
 };
-export const FitnessPhotoDraftSchema = z.object(photoDraftShape).strict();
+export const FitnessPhotoDraftSchema = z.object({ ...photoDraftShape, assetId: DraftAssetIdSchema, alt: plainText(500).default('') }).strict();
+export const PublishablePhotoSchema = z.object(photoDraftShape).strict();
 export const FitnessPhotoSchema = z.object({
   ...photoDraftShape, entryId: IdSchema, status: VisibilitySchema,
   createdAt: UtcTimestampSchema, updatedAt: UtcTimestampSchema,
 }).strict();
 const fitnessEntryDraftShape = {
-  entryDate: CalendarDateSchema, title: plainText(120).default(''), caption: plainText(2000).default(''),
+  entryDate: z.union([z.literal(''), CalendarDateSchema]).default(''), title: plainText(120).default(''), caption: plainText(2000).default(''),
   tags: z.array(plainText(40, 1)).max(20).default([]),
   sortOrder: SortOrderSchema, featured: z.boolean().default(false),
   photos: z.array(FitnessPhotoDraftSchema).max(100).default([]),
@@ -62,6 +63,9 @@ function validateFitnessEntry(value: { photos: { id: string }[]; tags: string[] 
   if (new Set(value.tags).size !== value.tags.length) ctx.addIssue({ code: 'custom', path: ['tags'], message: '标签不可重复' });
 }
 export const FitnessEntryDraftSchema = z.object(fitnessEntryDraftShape).strict().superRefine(validateFitnessEntry);
+export const PublishableFitnessEntrySchema = z.object({ ...fitnessEntryDraftShape,
+  entryDate: CalendarDateSchema, title: plainText(120, 1), photos: z.array(PublishablePhotoSchema).max(100).default([]),
+}).strict().superRefine(validateFitnessEntry);
 export const FitnessEntrySchema = z.object({
   ...fitnessEntryDraftShape, id: IdSchema, status: VisibilitySchema, version: VersionSchema,
   createdAt: UtcTimestampSchema, updatedAt: UtcTimestampSchema,
@@ -73,10 +77,14 @@ export type FitnessEntryDraft = z.infer<typeof FitnessEntryDraftSchema>;
 export type FitnessEntry = z.infer<typeof FitnessEntrySchema>;
 
 export const AlbumPhotoSchema = z.object(photoDraftShape).strict();
-export const AlbumDraftSchema = z.object({
-  title: plainText(120), slug: z.union([z.literal(''), SlugSchema]), description: plainText(5000).default(''),
-  coverAssetId: IdSchema.nullable().default(null), photos: z.array(AlbumPhotoSchema).max(500).default([]),
+const albumDraftShape = {
+  title: plainText(120).default(''), slug: z.union([z.literal(''), SlugSchema]).default(''), description: plainText(5000).default(''),
+  coverAssetId: IdSchema.nullable().default(null), photos: z.array(FitnessPhotoDraftSchema).max(500).default([]),
   featured: z.boolean().default(false), sortOrder: SortOrderSchema,
+};
+export const AlbumDraftSchema = z.object(albumDraftShape).strict().superRefine(uniquePhotos);
+export const PublishableAlbumSchema = z.object({ ...albumDraftShape, title: plainText(120, 1), slug: SlugSchema,
+  photos: z.array(AlbumPhotoSchema).max(500).default([]),
 }).strict().superRefine(uniquePhotos);
 export type AlbumDraft = z.infer<typeof AlbumDraftSchema>;
 export type AlbumPhoto = z.infer<typeof AlbumPhotoSchema>;
@@ -91,15 +99,28 @@ export const PlaylistTrackSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['providerRef', 'provider'], message: '歌单只接受预设音乐服务' });
   }
 });
-export const PlaylistDraftSchema = z.object({
-  name: plainText(120, 1), source: z.enum(['local', 'tencent', 'netease']),
-  sourceId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/u).nullable().default(null),
+const PlaylistTrackDraftSchema = z.object({ ...PlaylistTrackSchema.shape,
+  title: plainText(120).default(''), assetId: DraftAssetIdSchema.optional(),
+  providerRef: DraftProviderRefSchema.optional(),
+}).strict().superRefine(atMostOneMediaSource).superRefine((value, ctx) => {
+  if (value.providerRef && !['tencent', 'netease'].includes(value.providerRef.provider)) ctx.addIssue({ code: 'custom', path: ['providerRef', 'provider'], message: '歌单只接受预设音乐服务' });
+});
+const sourceIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,200}$/u);
+const playlistDraftShape = {
+  name: plainText(120).default(''), source: z.enum(['local', 'tencent', 'netease']).default('local'),
+  sourceId: z.union([z.literal(''), sourceIdSchema]).nullable().default(null),
   sortOrder: SortOrderSchema, enabled: z.boolean().default(true), isDefault: z.boolean().default(false),
-  tracks: z.array(PlaylistTrackSchema).max(500).default([]),
-}).strict().superRefine((value, ctx) => {
+  tracks: z.array(PlaylistTrackDraftSchema).max(500).default([]),
+};
+function validatePlaylist(value: { tracks: { id: string }[]; source: string; sourceId: string | null }, ctx: z.RefinementCtx) {
   requireUniqueIds(value.tracks, ctx, ['tracks']);
-  if (value.source === 'local' && value.sourceId !== null) ctx.addIssue({ code: 'custom', path: ['sourceId'], message: '本地歌单不使用外部来源 ID' });
-  if (value.source !== 'local' && value.sourceId === null) ctx.addIssue({ code: 'custom', path: ['sourceId'], message: '外部歌单需要来源 ID' });
+  if (value.source === 'local' && value.sourceId) ctx.addIssue({ code: 'custom', path: ['sourceId'], message: '本地歌单不使用外部来源 ID' });
+}
+export const PlaylistDraftSchema = z.object(playlistDraftShape).strict().superRefine(validatePlaylist);
+export const PublishablePlaylistSchema = z.object({ ...playlistDraftShape, name: plainText(120, 1),
+  sourceId: sourceIdSchema.nullable().default(null), tracks: z.array(PlaylistTrackSchema).max(500).default([]),
+}).strict().superRefine(validatePlaylist).superRefine((value, ctx) => {
+  if (value.source !== 'local' && !value.sourceId) ctx.addIssue({ code: 'custom', path: ['sourceId'], message: '发布外部歌单前请填写来源 ID' });
 });
 export type PlaylistTrack = z.infer<typeof PlaylistTrackSchema>;
 export type PlaylistDraft = z.infer<typeof PlaylistDraftSchema>;
