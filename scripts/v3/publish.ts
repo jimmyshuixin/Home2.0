@@ -34,15 +34,17 @@ export async function readCredentials(path:string):Promise<Credentials>{const in
 export function buildEnvironment(source:Record<string,string|undefined>,snapshot:string,origin:string):Record<string,string|undefined>{const env:Record<string,string|undefined>={};for(const[key,value]of Object.entries(source))if(/^(PATH|HOME|USERPROFILE|SYSTEMROOT|WINDIR|COMSPEC|PATHEXT|TEMP|TMP|TMPDIR|APPDATA|LOCALAPPDATA|LANG|LC_ALL)$/iu.test(key))env[key]=value;return{...env,NODE_ENV:'production',CI:'1',NUXT_TELEMETRY_DISABLED:'1',XVYIN_SNAPSHOT_PATH:snapshot,XVYIN_PUBLIC_ORIGIN:origin,XVYIN_INDEXABLE:origin==='https://xvyin.com'?'true':'false'};}
 export interface RunnerTransportOptions { origin:string; mode:'local'|'github'; localRunId:string; credentials?:Credentials; environment?:Record<string,string|undefined>; fetch?:typeof fetch; now?:()=>number; requestTimeoutMs?:number }
 export function createRunnerTransport(options:RunnerTransportOptions):{request(path:string,init?:RequestInit):Promise<Response>}{const client=new RunnerClient(validateOrigin(options.origin),{mode:options.mode,localRunId:options.localRunId},options.credentials,options.fetch??fetch,options.environment??process.env,options.now??Date.now,options.requestTimeoutMs??60000);return{request:(path,init)=>client.requestRaw(path,init)};}
-/** The test project's fixed Pages entry transports only authenticated CI internal requests.
- * Logical origin, OIDC audience, snapshot URLs and administrator traffic stay on test.xvyin.com.
+/** The V3 project's fixed Pages entry transports only authenticated CI internal requests.
+ * Both approved site origins use this same verified API service binding, including before apex cutover.
+ * Logical Origin, OIDC audience and snapshot URLs retain the selected test or apex origin.
+ * Local administrator traffic stays on that logical origin and never uses the Pages transport.
  * No CLI, environment variable, response or user input can supply a replacement transport host. */
 export function internalRunnerUrl(origin:string,mode:'local'|'github',path:string):URL{
  const logicalOrigin=validateOrigin(origin),pathname=path.split('?')[0]!;
  check(!/[\\\u0000-\u0020\u007f#]/u.test(path)&&/^\/api\/v1\/internal\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/u.test(pathname),'INVALID_REQUEST_PATH','执行器只可请求本站内部构建接口。');
  const logicalUrl=new URL(path,logicalOrigin);
  check(logicalUrl.origin===logicalOrigin&&logicalUrl.pathname===pathname,'INVALID_REQUEST_PATH','构建请求越过本站边界。');
- const transportOrigin=mode==='github'&&logicalOrigin==='https://test.xvyin.com'?'https://xvyin-v3-test.pages.dev':logicalOrigin;
+ const transportOrigin=mode==='github'?'https://xvyin-v3-test.pages.dev':logicalOrigin;
  return new URL(logicalUrl.pathname+logicalUrl.search,transportOrigin);
 }
 async function rejectCloudflareChallenge(response:Response):Promise<void>{
