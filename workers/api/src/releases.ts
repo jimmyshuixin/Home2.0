@@ -96,6 +96,12 @@ function publicAsset(asset: MediaAsset | null | undefined, id: string): PublicMe
   const photography = asset.metadata?.kind === 'image' ? asset.metadata.photography : undefined;
   return PublicMediaAssetSchema.parse({ id: asset.id, kind: asset.kind, ...(photography ? { photography } : {}), variants: asset.variants.map(({ key: _key, sha256: _sha, ...variant }) => ({ ...variant, url: `/api/v1/media/${asset.id}/${variant.role}` })) });
 }
+/** A code/metadata rebuild cannot quietly replace or drop previously public media. */
+function refreshedPublishedAsset(asset: MediaAsset | null | undefined, previous: PublicMediaAsset): PublicMediaAsset {
+  const current = publicAsset(asset, previous.id), expected = PublicMediaAssetSchema.parse(previous);
+  assert(current.kind === expected.kind && JSON.stringify(current.variants) === JSON.stringify(expected.variants), 'MEDIA_CHANGED', 409, '已公开媒体的衍生文件已改变，请检查后再重建公开页面');
+  return current;
+}
 async function immutableJson(bucket: R2Bucket, key: string, value: unknown, maxBytes: number): Promise<string> {
   const serialized = JSON.stringify(value);
   assert(new TextEncoder().encode(serialized).length <= maxBytes, 'RELEASE_TOO_LARGE', 422, '发布数据超过当前文档大小上限');
@@ -222,13 +228,18 @@ export class Releases {
     assert(snapshot.playlists.filter(p => p.enabled && p.isDefault).length <= 1, 'DEFAULT_PLAYLIST_CONFLICT', 422, '只能有一个启用的默认歌单');
     const routes = new Set([...snapshot.creations.map(v => `/creations/${v.slug}`), ...snapshot.albums.map(v => `/photography/${v.slug}`)]);
     if (!rebuildPublished) snapshot.routeAliases = Object.fromEntries(Object.entries(snapshot.routeAliases).filter(([from, to]) => !routes.has(from) && routes.has(to)));
-    // Preserve the already loaded published projection; never re-read the full previous snapshot.
-    const ids = [...collectAssetIds(snapshot)], wanted = new Set(ids), previousAssets = snapshot.assets;
-    const previousIds = new Set(previousAssets.map(asset => asset.id)), freshIds = rebuildPublished ? [] : ids.filter(assetId => !previousIds.has(assetId));
-    if (!rebuildPublished) snapshot.assets = previousAssets.filter(asset => wanted.has(asset.id));
+    // A rebuild refreshes only the media projection of the immutable public
+    // snapshot, preserving its asset order/membership and every content revision.
+    // Normal publication still reuses known assets and prepares only new ones.
+    const referencedIds = [...collectAssetIds(snapshot)], previousAssets = snapshot.assets;
+    const previousById = new Map(previousAssets.map(asset => [asset.id, asset]));
+    const ids = rebuildPublished ? previousAssets.map(asset => asset.id) : referencedIds, wanted = new Set(ids);
+    assert(!rebuildPublished || new Set(ids).size === ids.length && referencedIds.every(assetId => previousById.has(assetId)), 'RELEASE_INTEGRITY', 503, '公开快照的媒体引用不完整');
+    const freshIds = rebuildPublished ? ids : ids.filter(assetId => !previousById.has(assetId));
+    snapshot.assets = rebuildPublished ? [] : previousAssets.filter(asset => wanted.has(asset.id));
     const batchIds = freshIds.slice(0, RELEASE_ASSET_BATCH_SIZE);
-    const assets = rebuildPublished ? [] : await this.store.getMany<MediaAsset>(batchIds.map(assetId => `media/${assetId}`));
-    snapshot.assets.push(...batchIds.map((assetId, index) => publicAsset(assets[index], assetId)));
+    const assets = await this.store.getMany<MediaAsset>(batchIds.map(assetId => `media/${assetId}`));
+    snapshot.assets.push(...batchIds.map((assetId, index) => rebuildPublished ? refreshedPublishedAsset(assets[index], previousById.get(assetId)!) : publicAsset(assets[index], assetId)));
     const snapshotPrepared = freshIds.length === batchIds.length;
     const json = JSON.stringify(snapshot), snapshotSha256 = await sha256(json);
     assert(new TextEncoder().encode(json).length <= 10 * 1024 * 1024, 'SNAPSHOT_TOO_LARGE', 422, '发布快照超过当前上限，请减少单次公开内容');
@@ -264,7 +275,10 @@ export class Releases {
     const sourceJson = await source.text();
     assert(await sha256(sourceJson) === job.snapshotSha256, 'RELEASE_INTEGRITY', 503, '冻结的候选来源校验失败');
     const snapshot = JSON.parse(sourceJson) as Snapshot, known = new Set(snapshot.assets.map(asset => asset.id));
-    const remainingIds = [...collectAssetIds(snapshot)].filter(assetId => !known.has(assetId));
+    const previous = job.rebuildPublished && job.previousReleaseId ? await this.snapshot(job.previousReleaseId) : null;
+    assert(!job.rebuildPublished || previous, 'RELEASE_INTEGRITY', 503, '重建缺少原公开快照');
+    const previousById = new Map(previous?.assets.map(asset => [asset.id, asset]) || []);
+    const remainingIds = (previous ? previous.assets.map(asset => asset.id) : [...collectAssetIds(snapshot)]).filter(assetId => !known.has(assetId));
     const key = `private-snapshot-preparation/${id}.json`, current = await this.bucket.get(key);
     assert(!current || current.size <= 10 * 1024 * 1024, 'RELEASE_INVALID', 503, '候选准备进度无效');
     let progress: SnapshotPreparationState = current ? await current.json<SnapshotPreparationState>() : { sourceSha256: job.snapshotSha256, processed: 0, assets: [] };
@@ -276,7 +290,7 @@ export class Releases {
       const batchIds = remainingIds.slice(progress.processed, progress.processed + RELEASE_ASSET_BATCH_SIZE);
       const records = await this.store.getMany<MediaAsset>(batchIds.map(assetId => `media/${assetId}`));
       const next: SnapshotPreparationState = { ...progress, processed: progress.processed + batchIds.length,
-        assets: [...progress.assets, ...batchIds.map((assetId, index) => publicAsset(records[index], assetId))] };
+        assets: [...progress.assets, ...batchIds.map((assetId, index) => previous ? refreshedPublishedAsset(records[index], previousById.get(assetId)!) : publicAsset(records[index], assetId))] };
       const serialized = JSON.stringify(next);
       assert(new TextEncoder().encode(serialized).length <= 10 * 1024 * 1024, 'RELEASE_TOO_LARGE', 422, '候选资产投影超过文档大小上限');
       const updated = await this.bucket.put(key, serialized, { onlyIf: current ? { etagMatches: current.etag } : { etagDoesNotMatch: '*' } });

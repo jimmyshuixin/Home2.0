@@ -62,7 +62,7 @@ export function publishedTarget(snapshot: Snapshot, target: EngagementTarget): {
 }
 function publicPage(snapshot: Snapshot, path: string): { title: string; path: string } | null {
   const normalized = path === '/' ? '/' : `${path.replace(/\/$/u, '')}/`;
-  const pages: Record<string, string> = { '/': '首页', '/about/': '关于', '/creations/': '创作', '/photography/': '摄影', '/fitness/': '健身', '/guestbook/': '留言', '/contact/': '联系', '/privacy/': '隐私说明' };
+  const pages: Record<string, string> = { '/': '首页', '/about/': '关于', '/creations/': '创作', '/photography/': '摄影', '/fitness/': '健身', '/guestbook/': '留言', '/contact/': '联系' };
   if (pages[normalized]) return { path: normalized, title: pages[normalized] };
   const creation = snapshot.creations.find(item => `/creations/${item.slug}/` === normalized);
   if (creation) return { path: normalized, title: creation.title };

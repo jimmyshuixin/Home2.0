@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { AlbumDraftSchema, CreationDraftSchema, FitnessEntryDraftSchema, FitnessSettingsDraftSchema, PlaylistDraftSchema, SiteSettingsSchema } from '@xvyin/contracts';
-import { Releases, type ReleaseJob, type ReleaseManifest } from '../src/releases';
+import { Releases, type ReleaseJob, type ReleaseManifest, type Snapshot } from '../src/releases';
 import { Records } from '../src/records';
 import { MemoryStore } from '../src/store/memory';
 import type { Store, Transaction } from '../src/store/types';
@@ -11,6 +11,7 @@ import { sha256 } from '../src/security';
 const instant = Date.UTC(2026, 8, 12, 5), codeSha = 'a'.repeat(40), runId = 'test-preparation-run';
 let mf: Miniflare, bucket: R2Bucket, memory: MemoryStore, releases: Releases, operations = 0, batches: number[];
 let losePreparationResponse = false;
+let readKeys: string[];
 beforeAll(async () => {
   mf = new Miniflare({ ...convertV4MiniflareOptions({ modules: true, script: 'export default { fetch() { return new Response("local test"); } }', compatibilityDate: '2026-09-11', r2Buckets: ['MEDIA'] }), telemetry: { enabled: false }, cf: false });
   bucket = await mf.getR2Bucket('MEDIA') as unknown as R2Bucket;
@@ -19,16 +20,16 @@ afterAll(async () => { await mf.dispose(); });
 beforeEach(async () => {
   let cursor: string | undefined;
   do { const page = await bucket.list({ cursor }); if (page.objects.length) await bucket.delete(page.objects.map(item => item.key)); cursor = page.truncated ? page.cursor : undefined; } while (cursor);
-  memory = new MemoryStore(); operations = 0; batches = []; losePreparationResponse = false;
+  memory = new MemoryStore(); operations = 0; batches = []; losePreparationResponse = false; readKeys = [];
   // Count the business-method I/O using the same Firestore protocol costs: begin/read/commit.
   // Authentication/token requests live outside these methods and are deliberately not claimed here.
   const store: Store = {
-    get: async <T>(key: string) => { operations++; return memory.get<T>(key); },
-    getMany: async <T>(keys: readonly string[]) => { if (keys.length) operations++; batches.push(keys.length); return memory.getMany<T>(keys); },
+    get: async <T>(key: string) => { operations++; readKeys.push(key); return memory.get<T>(key); },
+    getMany: async <T>(keys: readonly string[]) => { if (keys.length) operations++; readKeys.push(...keys); batches.push(keys.length); return memory.getMany<T>(keys); },
     list: async <T>(collection: string, options?: { limit?: number; cursor?: string }) => { operations++; return memory.list<T>(collection, options); },
     transaction: async <T>(callback: (tx: Transaction) => Promise<T>) => {
       operations++;
-      const result = await memory.transaction(tx => callback({ get: async <U>(key: string) => { operations++; return tx.get<U>(key); }, put: tx.put.bind(tx), delete: tx.delete.bind(tx) }));
+      const result = await memory.transaction(tx => callback({ get: async <U>(key: string) => { operations++; readKeys.push(key); return tx.get<U>(key); }, put: tx.put.bind(tx), delete: tx.delete.bind(tx) }));
       operations++; return result;
     },
   };
@@ -76,6 +77,80 @@ async function prepare(job: ReleaseJob): Promise<ReleaseJob> {
 function files() {
   return { files: ['/', '/about/', '/creations/', '/photography/', '/fitness/', '/guestbook/', '/contact/', '/photography/test-album/'].map(path => ({ path: `${path}index.html`, sha256: 'c'.repeat(64), bytes: 200, contentType: 'text/html; charset=utf-8' })) };
 }
+
+/** A published pointer fixture for bounded preparation; full activation is covered by integration tests. */
+async function publishedCandidate(count: number): Promise<{ before: Snapshot; recordId: string }> {
+  const { job, recordId } = await candidate(count); await prepare(job);
+  const before = await releases.snapshot(job.id);
+  before.routeAliases = { '/photography/old-album': '/photography/test-album' };
+  // Existing public asset order need not match the current traversal order of content references.
+  before.assets.reverse();
+  await bucket.put(`private-snapshots/${job.id}.json`, JSON.stringify(before));
+  await bucket.put('active-release.json', JSON.stringify({ releaseId: job.id, schemaVersion: 1, manifestSha256: 'd'.repeat(64), activatedAt: new Date(instant).toISOString(), codeSha, runId }));
+  return { before, recordId };
+}
+
+describe('bounded public media metadata refresh during rebuild', () => {
+  it('refreshes 250 published projections in 100/100/50 batches without reading drafts or changing public content/order', async () => {
+    const { before, recordId } = await publishedCandidate(250);
+    await memory.transaction(async tx => {
+      const records = await Promise.all(before.assets.map(asset => tx.get<MediaAsset>(`media/${asset.id}`)));
+      records.forEach(asset => tx.put(`media/${asset!.id}`, { ...asset, metadata: { kind: 'image', detectedMime: 'image/png', bytes: 100, sha256: 'b'.repeat(64), width: 1, height: 1, photography: { cameraModel: `Camera ${asset!.id}`, takenDate: '2024-02-29' } } }));
+      tx.put(`albums/${recordId}`, { draft: { title: 'PRIVATE INCOMPLETE LATER EDIT' } });
+    });
+    operations = 0; batches = []; readKeys = [];
+    const job = await releases.create({ changes: [], expectedReleaseId: before.releaseId, rebuildPublished: true }, 'test-admin');
+    expect(job).toMatchObject({ rebuildPublished: true, snapshotPrepared: false, preparedAssetCount: 100, assetCount: 250, selectedRevisionIds: {} });
+    expect(batches).toEqual([100]); expect(operations).toBeLessThanOrEqual(14);
+    expect(await bucket.get(`private-snapshots/${job.id}.json`)).toBeNull();
+    await releases.claim(job.id, runId, codeSha);
+    operations = 0; batches = [];
+    const middle = await releases.prepareSnapshot(job.id, runId);
+    expect(middle).toMatchObject({ snapshotPrepared: false, preparedAssetCount: 200 });
+    expect(batches).toEqual([100]); expect(operations).toBeLessThanOrEqual(12);
+    operations = 0; batches = [];
+    const done = await releases.prepareSnapshot(job.id, runId);
+    expect(done).toMatchObject({ snapshotPrepared: true, preparedAssetCount: 250 });
+    expect(batches).toEqual([50]); expect(operations).toBeLessThanOrEqual(12);
+    const actual = await releases.snapshot(job.id);
+    expect(actual).toEqual({ ...before, releaseId: job.id, assets: before.assets.map(asset => ({ ...asset, photography: { cameraModel: `Camera ${asset.id}`, takenDate: '2024-02-29' } })) });
+    expect(readKeys.filter(key => /^(?:albums|creations|fitness|playlists|settings)\//u.test(key))).toEqual([]);
+    expect(await releases.snapshot(before.releaseId)).toEqual(before);
+    expect(done.snapshotSha256).toBe(await sha256(JSON.stringify(actual)));
+    let manifest = await releases.registerManifest(job.id, runId, files());
+    while ('pending' in manifest) manifest = await releases.registerManifest(job.id, runId, files());
+    expect(Object.keys(manifest.assets)).toHaveLength(250);
+  });
+
+  it.each(['missing', 'processing', 'failed', 'changed-variants'] as const)('keeps the active snapshot intact when a %s media record prevents a later rebuild batch', async state => {
+    const { before } = await publishedCandidate(101);
+    const lastId = before.assets.at(-1)!.id;
+    const rebuild = await releases.create({ changes: [], expectedReleaseId: before.releaseId, rebuildPublished: true }, 'test-admin');
+    await releases.claim(rebuild.id, runId, codeSha);
+    await memory.transaction(async tx => {
+      const asset = await tx.get<MediaAsset>(`media/${lastId}`);
+      if (state === 'missing') tx.delete(`media/${lastId}`);
+      else tx.put(`media/${lastId}`, state === 'changed-variants' ? { ...asset, variants: asset!.variants.map(variant => ({ ...variant, bytes: variant.bytes + 1 })) } : { ...asset, status: state });
+    });
+    await expect(releases.prepareSnapshot(rebuild.id, runId)).rejects.toMatchObject({ code: state === 'changed-variants' ? 'MEDIA_CHANGED' : 'MEDIA_NOT_READY' });
+    expect((await releases.get(rebuild.id)).preparedAssetCount).toBe(100);
+    expect(await bucket.get(`private-snapshots/${rebuild.id}.json`)).toBeNull();
+    expect((await releases.active())!.value.releaseId).toBe(before.releaseId);
+    expect(await releases.snapshot(before.releaseId)).toEqual(before);
+    await expect(releases.registerManifest(rebuild.id, runId, files())).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_PREPARED' });
+  });
+
+  it('rejects unavailable or replaced media in the first rebuild batch before creating a candidate', async () => {
+    const { before } = await publishedCandidate(1), assetId = before.assets[0]!.id;
+    const original = await memory.get<MediaAsset>(`media/${assetId}`);
+    for (const state of ['processing', 'changed-variants'] as const) {
+      await memory.transaction(async tx => tx.put(`media/${assetId}`, state === 'processing' ? { ...original, status: 'processing' } : { ...original, variants: original!.variants.map(variant => ({ ...variant, width: 2 })) }));
+      await expect(releases.create({ changes: [], expectedReleaseId: before.releaseId, rebuildPublished: true }, 'test-admin')).rejects.toMatchObject({ code: state === 'processing' ? 'MEDIA_NOT_READY' : 'MEDIA_CHANGED' });
+    }
+    expect((await memory.list('releases')).items).toHaveLength(1);
+    expect((await releases.active())!.value.releaseId).toBe(before.releaseId);
+  });
+});
 
 describe('cross-request asset preparation using real local R2 conditional writes', () => {
   it('freezes 50 selected changes across all modules with bounded bulk reads, including idempotent creation and dispatch bookkeeping', async () => {

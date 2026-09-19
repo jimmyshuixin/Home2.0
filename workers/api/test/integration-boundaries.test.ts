@@ -133,7 +133,7 @@ describe('explicit rebuilding of published content', () => {
     expect(created.status).toBe(201);
     const job = (await created.json() as { data: ReleaseJob }).data;
     expect(job).toMatchObject({ changes: [], rebuildPublished: true, previousReleaseId: initial.id, selectedRevisionIds: {}, snapshotPrepared: true });
-    expect(reads.mock.calls).toEqual([]); reads.mockRestore();
+    expect(reads.mock.calls).toEqual([[['media/published-image']]]); reads.mockRestore();
     expect(await api.releases.snapshot(job.id)).toEqual({ ...published, releaseId: job.id });
     expect(await api.releases.create(input, uid, key)).toMatchObject({ id: job.id });
     const ready = await finishBuild(job);
@@ -143,6 +143,25 @@ describe('explicit rebuilding of published content', () => {
     expect(await (await request('/api/v1/creations')).text()).toContain('Published title');
     expect(await (await request('/api/v1/creations')).text()).not.toContain('PRIVATE');
     await expect(api.releases.create(input, uid)).rejects.toMatchObject({ code: 'RELEASE_CONFLICT' });
+  });
+
+  it('rebuilds a previously published photo with backfilled EXIF without republishing the content draft', async () => {
+    const asset = await seedAsset('legacy-camera-image');
+    const record = await api.records.save('creations', CreationDraftSchema, { ...creation('Original public title'), coverAssetId: asset.id }, uid);
+    const initial = await finishBuild(await api.releases.create({ changes: [{ collection: 'creations', id: record.id, version: 1, action: 'publish' }], expectedReleaseId: null }, uid));
+    await api.releases.activate(initial.id, null);
+    const before = await api.releases.snapshot(initial.id), photography = { cameraMake: 'Canon', cameraModel: 'EOS R5', aperture: 4, iso: 200, takenDate: '2024-02-29' };
+    expect(before.assets[0]).not.toHaveProperty('photography');
+    await store.transaction(async tx => { tx.put(`media/${asset.id}`, { ...asset, metadata: { kind: 'image', detectedMime: 'image/jpeg', bytes: 16, sha256: 'b'.repeat(64), width: 8000, height: 6000, photography } }); });
+    await api.records.save('creations', CreationDraftSchema, { title: 'PRIVATE LATER DRAFT' }, uid, record.id, 1);
+    const candidate = await api.releases.create({ changes: [], expectedReleaseId: initial.id, rebuildPublished: true }, uid);
+    const rebuilt = await api.releases.snapshot(candidate.id);
+    expect(rebuilt).toEqual({ ...before, releaseId: candidate.id, assets: before.assets.map(value => ({ ...value, photography })) });
+    expect(rebuilt.creations[0]).toMatchObject({ title: 'Original public title', revisionId: record.draftRevisionId, publishedAt: before.creations[0]!.publishedAt });
+    const ready = await finishBuild(candidate); await api.releases.activate(ready.id, initial.id);
+    expect((await api.releases.snapshot(ready.id)).assets[0]!.photography).toEqual(photography);
+    expect(await api.releases.snapshot(initial.id)).toEqual(before);
+    expect(await store.get(`creations/${record.id}`)).toMatchObject({ version: 2, draft: { title: 'PRIVATE LATER DRAFT' } });
   });
 });
 

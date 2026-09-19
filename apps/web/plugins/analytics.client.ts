@@ -29,7 +29,7 @@ export default defineNuxtPlugin((nuxtApp) => {
     if (visit) { visit.clock.setActive(false); send('end'); visit = null }
     const path = router.currentRoute.value.path
     const normalized = path.replace(/\/$/, '')
-    if (!analyticsAllowed() || stopForQuota || path.startsWith('/admin') || normalized === '/privacy' || site.releaseId === 'unpublished') return
+    if (!analyticsAllowed() || stopForQuota || path.startsWith('/admin') || site.releaseId === 'unpublished') return
     const creation = site.creations.find(item => `/creations/${item.slug}` === normalized)
     const album = site.albums.find(item => `/photography/${item.slug}` === normalized)
     const target = targetOverride || (creation ? { type: 'creation' as const, id: creation.id } : album ? { type: 'album' as const, id: album.id } : undefined)

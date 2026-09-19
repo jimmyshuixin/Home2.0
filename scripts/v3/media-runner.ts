@@ -8,6 +8,7 @@ import { DetectedMediaMetadataSchema, IdSchema, UploadMetadataSchema, type Uploa
 import { hashFile, MediaProcessingError, processMedia, type ProcessedMedia } from './process-media';
 import { ProcessingVariantSchema } from '../../workers/api/src/processing';
 import { createRunnerTransport, PublishError, readCredentials, validateOrigin } from './publish';
+import { photographyRunnerCli, PhotographyRunnerError } from './photo-metadata-runner';
 
 /** Authentication/refresh is supplied by the shared private-runner HTTP client. */
 export interface MediaRunnerClient { request(path: string, init?: RequestInit): Promise<Response> }
@@ -165,6 +166,11 @@ export async function mediaRunnerCli(args = process.argv.slice(2)): Promise<void
   requireValue(values.asset && values.origin, 'INVALID_ARGUMENTS', '需要 --asset 与 --origin');
   const assetId = IdSchema.parse(values.asset), origin = validateOrigin(values.origin), mode = values['auth-file'] ? 'local' : 'github';
   requireValue(mode === 'local' || process.env.GITHUB_ACTIONS === 'true' && /^\d+$/.test(process.env.GITHUB_RUN_ID || ''), 'AUTH_REQUIRED', '本地执行需要私有管理员会话文件；GitHub 任务使用 OIDC');
+  // A reserved maintenance target reuses the existing authenticated workflow.
+  // Uploaded media IDs are generated UUIDs and cannot collide with this name.
+  if (assetId === 'maintenance-photography-v1') {
+    return photographyRunnerCli(['--origin', origin, ...(values['auth-file'] ? ['--auth-file', values['auth-file']] : [])]);
+  }
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..'), privateRoot = resolve(root, '.private-build'), directory = resolve(privateRoot, `media-${assetId}`);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   requireValue(!(await lstat(privateRoot)).isSymbolicLink() && !(await lstat(directory)).isSymbolicLink() && isWithin(await realpath(root), await realpath(directory)), 'INVALID_WORKSPACE', '私密任务目录无效');
@@ -180,7 +186,7 @@ export async function mediaRunnerCli(args = process.argv.slice(2)): Promise<void
 }
 /** Expose only validated error categories; provider bodies and credentials never reach CLI output. */
 export function mediaRunnerFailure(error: unknown): { code: string; message: string } {
-  const known = error instanceof MediaRunnerError || error instanceof MediaProcessingError || error instanceof PublishError;
+  const known = error instanceof MediaRunnerError || error instanceof MediaProcessingError || error instanceof PublishError || error instanceof PhotographyRunnerError;
   const code = known && /^[A-Z0-9_]{1,80}$/u.test(error.code) ? error.code : 'MEDIA_RUNNER_FAILED';
   return { code, message: '媒体处理未完成；本地私密文件与服务端容量记录已保留，可核对后重试。' };
 }

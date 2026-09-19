@@ -16,6 +16,7 @@ export interface MediaAsset {
   metadata?: DetectedMediaMetadata; variants: Array<PublicMediaVariant & { key: string; sha256: string }>;
   createdAt: string; updatedAt: string; error?: { code: string; message: string };
   version?: number; category?: string; lifecycle?: 'active' | 'trash' | 'purging' | 'deleted'; trashedAt?: string; deletedAt?: string; purgeJobId?: string;
+  photographyBackfill?: { version: 1; sha256: string; checkedAt: string; status: 'updated' | 'no_exif' };
 }
 const defaultQuota = (): Quota => ({ usedBytes: 0, reservedBytes: 0, limitBytes: MEDIA_LIMITS.totalBytes });
 export class Media {

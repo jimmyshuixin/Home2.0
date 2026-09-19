@@ -12,6 +12,7 @@ import { MediaLibrary, type PurgeJob } from './media-library';
 import type { PublicReadCache } from './public-read-cache';
 import { cachePublishedSection, type PublishedSection } from './public-data';
 import { Processing } from './processing';
+import { PhotographyBackfill } from './photography-backfill';
 import { Releases, emptySnapshot, type Snapshot, type ReleaseJob, type ReleaseManifest } from './releases';
 import { renderPublic, serveObject, publicIndex } from './render';
 import { AnalyticsQuerySchema, EngagementTargetSchema, LikeInputSchema, VisitInputSchema } from '@xvyin/contracts';
@@ -34,6 +35,7 @@ export function createApi(runtime: Runtime) {
   const app = new Hono<Context>(), sessions = new Sessions(runtime.store, runtime.auth, runtime.secureCookies, runtime.now), records = new Records(runtime.store, runtime.now), media = new Media(runtime.store, runtime.bucket, runtime.now), releases = new Releases(runtime.store, runtime.bucket, runtime.now, runtime.codeSha);
   const previewCookie = runtime.secureCookies ? '__Host-xvyin_preview' : 'xvyin_local_preview';
   const processing = new Processing(runtime.store, runtime.bucket, runtime.now);
+  const photographyBackfill = new PhotographyBackfill(runtime.store, runtime.bucket, runtime.now);
   const library = new MediaLibrary(runtime.store, runtime.bucket, runtime.now);
   const engagement = new Engagement(runtime.store, runtime.privacySalt, runtime.now);
   const publicPurge = ({ keys, ...job }: PurgeJob) => ({ ...job, totalKeys: keys.length });
@@ -301,6 +303,9 @@ export function createApi(runtime: Runtime) {
     return response(await releases.fail(job.id, identity.runId, values.code), c.get('requestId'));
   });
   const processingRunner = async (request: Request) => { const identity = await runner(request); assert(identity.codeSha === runtime.codeSha && /^[a-f0-9]{40}$/u.test(identity.codeSha), 'BUILD_CODE_MISMATCH', 403, '媒体处理代码版本不匹配'); return identity; };
+  app.get('/api/v1/internal/photography', async c => { await processingRunner(c.req.raw); const cursor = z.string().max(8192).optional().parse(c.req.query('cursor')); return response(await photographyBackfill.page(cursor), c.get('requestId')); });
+  app.get('/api/v1/internal/photography/:id/source', async c => { await processingRunner(c.req.raw); return photographyBackfill.source(IdSchema.parse(c.req.param('id'))); });
+  app.post('/api/v1/internal/photography/:id/complete', async c => { await processingRunner(c.req.raw); return response(await photographyBackfill.complete(IdSchema.parse(c.req.param('id')), await input(c.req.raw, 4096)), c.get('requestId')); });
   app.post('/api/v1/internal/processing/:id/claim', async c => { const identity = await processingRunner(c.req.raw); return response(await processing.claim(IdSchema.parse(c.req.param('id')), identity.runId), c.get('requestId')); });
   app.get('/api/v1/internal/processing/:id/status', async c => { const identity = await processingRunner(c.req.raw); return response(processing.publicJob(await processing.get(IdSchema.parse(c.req.param('id')), identity.runId)), c.get('requestId')); });
   app.get('/api/v1/internal/processing/:id/source', async c => { const identity = await processingRunner(c.req.raw); return processing.source(IdSchema.parse(c.req.param('id')), identity.runId, c.req.raw); });
