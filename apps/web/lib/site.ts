@@ -5,6 +5,7 @@ import { imageSourceSet } from './image-variants'
 export type * from './models'
 export const site = data as SiteSnapshot
 const assetsById = new Map(site.assets.map(asset => [asset.id, asset]))
+export function assetPhotography(id: string) { return assetsById.get(id)?.photography }
 export function assetSrcSet(id?: string | null): string | undefined { return id ? imageSourceSet(assetsById.get(id)?.variants || []) : undefined }
 export function safeUrl(value?: string | null): string | undefined {
   if (!value || /[\u0000-\u0020\\]/.test(value)) return undefined

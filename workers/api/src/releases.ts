@@ -93,7 +93,8 @@ export function collectAssetIds(value: unknown, ids = new Set<string>()): Set<st
 }
 function publicAsset(asset: MediaAsset | null | undefined, id: string): PublicMediaAsset {
   assert(asset?.id === id && asset.status === 'ready' && asset.variants.length, 'MEDIA_NOT_READY', 422, '引用的媒体尚未处理完成');
-  return PublicMediaAssetSchema.parse({ id: asset.id, kind: asset.kind, variants: asset.variants.map(({ key: _key, sha256: _sha, ...variant }) => ({ ...variant, url: `/api/v1/media/${asset.id}/${variant.role}` })) });
+  const photography = asset.metadata?.kind === 'image' ? asset.metadata.photography : undefined;
+  return PublicMediaAssetSchema.parse({ id: asset.id, kind: asset.kind, ...(photography ? { photography } : {}), variants: asset.variants.map(({ key: _key, sha256: _sha, ...variant }) => ({ ...variant, url: `/api/v1/media/${asset.id}/${variant.role}` })) });
 }
 async function immutableJson(bucket: R2Bucket, key: string, value: unknown, maxBytes: number): Promise<string> {
   const serialized = JSON.stringify(value);

@@ -69,7 +69,7 @@ describe('private processing state machine with real R2 multipart', () => {
     await processing.plan(asset.id, run, { metadata, variants });
     await expect(processing.plan(asset.id, run, { metadata, variants: variants.map(item => ({ ...item, sha256: '0'.repeat(64) })) })).rejects.toMatchObject({ code: 'PLAN_CONFLICT' });
   });
-  it('atomically admits only one plan near the total 10 GB quota', async () => {
+  it('atomically admits only one plan near the 9 GB media budget', async () => {
     const a = await seed('image-a'), b = await seed('image-b'), { variants, bytes } = await imagePlan();
     await processing.claim(a.asset.id, run); await processing.claim(b.asset.id, run);
     await store.transaction(async tx => { const quota = (await tx.get<Quota>('system/media_quota'))!; tx.put('system/media_quota', { ...quota, usedBytes: MEDIA_LIMITS.totalBytes - bytes.length * 3 }); });

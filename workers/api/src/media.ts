@@ -20,7 +20,11 @@ export interface MediaAsset {
 const defaultQuota = (): Quota => ({ usedBytes: 0, reservedBytes: 0, limitBytes: MEDIA_LIMITS.totalBytes });
 export class Media {
   constructor(readonly store: Store, readonly bucket: R2Bucket, readonly now: () => number) {}
-  async quota(): Promise<Quota> { return await this.store.get<Quota>('system/media_quota') || defaultQuota(); }
+  async quota(): Promise<Quota> {
+    // Existing quota documents may predate the free-tier reserve. The effective
+    // limit is code-owned; never display a stale 10 GB as media availability.
+    return { ...(await this.store.get<Quota>('system/media_quota') || defaultQuota()), limitBytes: MEDIA_LIMITS.totalBytes };
+  }
   async start(input: unknown, uid: string, idempotencyKey?: string): Promise<Upload> {
     type Receipt = { uploadId: string; assetId: string; key: string; authorUid: string; payloadHash: string; createdAt: number; state: 'reserved' | 'initializing' | 'uncertain' | 'ready'; token?: string; initializedAt?: number; r2UploadId?: string };
     const metadata = UploadMetadataSchema.parse(input), requestKey = z.string().uuid().parse(idempotencyKey ?? crypto.randomUUID());
@@ -36,10 +40,10 @@ export class Media {
         return prior;
       }
       const quota = await tx.get<Quota>('system/media_quota') || defaultQuota();
-      assert(canReserveMediaBytes(quota.usedBytes, quota.reservedBytes, metadata.expectedBytes), 'MEDIA_QUOTA_EXCEEDED', 409, '媒体总容量将超过 10 GB');
+      assert(canReserveMediaBytes(quota.usedBytes, quota.reservedBytes, metadata.expectedBytes), 'MEDIA_QUOTA_EXCEEDED', 409, '媒体原件、衍生版本与上传预留合计最多 9 GB；另留 1 GB 给网站发布。请先整理媒体空间。');
       const uploadId = crypto.randomUUID(), assetId = crypto.randomUUID(), key = `originals/${assetId}/source`;
       const created: Receipt = { uploadId, assetId, key, authorUid: uid, payloadHash, createdAt: this.now(), state: 'reserved' };
-      tx.put('system/media_quota', { ...quota, reservedBytes: quota.reservedBytes + metadata.expectedBytes });
+      tx.put('system/media_quota', { ...quota, limitBytes: MEDIA_LIMITS.totalBytes, reservedBytes: quota.reservedBytes + metadata.expectedBytes });
       tx.put(`upload_reservations/${uploadId}`, { bytes: metadata.expectedBytes, key, createdAt: created.createdAt, state: 'reserved' });
       tx.put(receiptPath, created); return created;
     });

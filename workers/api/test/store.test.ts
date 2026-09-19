@@ -83,8 +83,8 @@ describe.each(['memory', 'sqlite'] as const)('%s Store semantic contract', kind 
     expect(await store.get('entries/a')).toEqual({ v: 1 });
   });
 
-  it('admits only one simultaneous reservation when the other would exceed 10 GB', async () => {
-    await store.transaction(async tx => { tx.put('quotas/media', { used: 9_000_000_000, reserved: 0 }); });
+  it('admits only one simultaneous reservation when the other would exceed the 9 GB media budget', async () => {
+    await store.transaction(async tx => { tx.put('quotas/media', { used: 8_000_000_000, reserved: 0 }); });
     const reserve = () => store.transaction(async tx => {
       const quota = await tx.get<{ used: number; reserved: number }>('quotas/media');
       await new Promise<void>(resolveWait => setTimeout(resolveWait, 5));
@@ -92,7 +92,7 @@ describe.each(['memory', 'sqlite'] as const)('%s Store semantic contract', kind 
       tx.put('quotas/media', { ...quota!, reserved: quota!.reserved + 512_000_000 }); return true;
     });
     expect(await Promise.all([reserve(), reserve()])).toEqual([true, false]);
-    expect(await store.get('quotas/media')).toEqual({ used: 9_000_000_000, reserved: 512_000_000 });
+    expect(await store.get('quotas/media')).toEqual({ used: 8_000_000_000, reserved: 512_000_000 });
   });
 
   it('lets optimistic version checks reject a stale editor rather than silently overwrite', async () => {

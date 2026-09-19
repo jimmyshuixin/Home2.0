@@ -14,6 +14,8 @@ import { cachePublishedSection, type PublishedSection } from './public-data';
 import { Processing } from './processing';
 import { Releases, emptySnapshot, type Snapshot, type ReleaseJob, type ReleaseManifest } from './releases';
 import { renderPublic, serveObject, publicIndex } from './render';
+import { AnalyticsQuerySchema, EngagementTargetSchema, LikeInputSchema, VisitInputSchema } from '@xvyin/contracts';
+import { cachedLikeCount, Engagement, guardEngagementRequest } from './engagement';
 export interface Runtime {
   store: Store; bucket: R2Bucket; auth: AuthProvider; now: () => number; secureCookies: boolean;
   allowedOrigins: string[]; privacySalt: string; adminUsername: string; codeSha: string;
@@ -33,6 +35,7 @@ export function createApi(runtime: Runtime) {
   const previewCookie = runtime.secureCookies ? '__Host-xvyin_preview' : 'xvyin_local_preview';
   const processing = new Processing(runtime.store, runtime.bucket, runtime.now);
   const library = new MediaLibrary(runtime.store, runtime.bucket, runtime.now);
+  const engagement = new Engagement(runtime.store, runtime.privacySalt, runtime.now);
   const publicPurge = ({ keys, ...job }: PurgeJob) => ({ ...job, totalKeys: keys.length });
   const response = (data: unknown, requestId: string, extra: Record<string, unknown> = {}, status = 200) => new Response(JSON.stringify({ data, meta: { requestId, schemaVersion: 1, ...extra } }), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
   const input = async (request: Request, max?: number) => { const value = await boundedJson(request, max); const problem = boundedTreeProblem(value, 24, 15000); assert(!problem, 'INVALID_CONTENT_TREE', 422, problem || '内容结构无效'); return value; };
@@ -218,6 +221,36 @@ export function createApi(runtime: Runtime) {
   app.get('/api/v1/admin/statistics', async c => {
     const statistics = await readStatistics(runtime.store), counts = statistics?.counts;
     return response({ content: { creations: counts?.creations ?? null, albums: counts?.albums ?? null, fitness: counts?.fitness ?? null, playlists: counts?.playlists ?? null }, moderation: { pending: counts?.commentsPending ?? null, contacts: counts?.contacts ?? null }, media: await media.quota(), traffic: null, statisticsInitializedAt: statistics?.initializedAt ?? null, activeReleaseId: (await releases.active())?.value.releaseId || null }, c.get('requestId'));
+  });
+  const engagementSnapshot = async () => { const active = await releases.active(); return active ? releases.snapshot(active.value.releaseId) : emptySnapshot('unpublished'); };
+  app.post('/api/v1/analytics/visit', async c => {
+    if (cookieValue(c.req.raw, previewCookie) || cookieValue(c.req.raw, sessions.cookieName) || c.req.header('dnt') === '1' || c.req.header('sec-gpc') === '1') return response({ recorded: false, reason: 'privacy_or_admin' }, c.get('requestId'));
+    guardEngagementRequest(c.req.raw, 'visit', runtime.now());
+    const values = VisitInputSchema.parse(await input(c.req.raw, 4096));
+    return response(await engagement.visit(c.req.raw, values, await engagementSnapshot()), c.get('requestId'));
+  });
+  app.get('/api/v1/likes', async c => {
+    guardEngagementRequest(c.req.raw, 'likes', runtime.now());
+    const target = EngagementTargetSchema.parse({ type: c.req.query('type'), id: c.req.query('id'), ...(c.req.query('parentId') ? { parentId: c.req.query('parentId') } : {}) });
+    const visitorId = z.string().uuid().optional().parse(c.req.query('visitorId'));
+    const active = await releases.active(), releaseId = active?.value.releaseId || 'unpublished';
+    const loadSnapshot = async () => {
+      const snapshot = emptySnapshot(releaseId), section = target.type === 'creation' ? 'creations' : target.type === 'fitness' ? 'fitness' : 'albums';
+      if (active) { const value = await cachePublishedSection(runtime.publicReadCache, releaseId, section, () => releases.snapshot(releaseId)); Object.assign(snapshot, { [section]: value }); }
+      return snapshot;
+    };
+    const data = visitorId ? await engagement.likes(target, visitorId, await loadSnapshot()) : await cachedLikeCount(runtime.publicReadCache, releaseId, target, async () => engagement.count(target, await loadSnapshot()));
+    return response(data, c.get('requestId'));
+  });
+  app.put('/api/v1/likes', async c => {
+    guardEngagementRequest(c.req.raw, 'likes', runtime.now());
+    const { visitorId, liked, ...rawTarget } = LikeInputSchema.parse(await input(c.req.raw, 4096));
+    const target = EngagementTargetSchema.parse(rawTarget);
+    return response(await engagement.setLike(c.req.raw, target, visitorId, liked, await engagementSnapshot()), c.get('requestId'));
+  });
+  app.get('/api/v1/admin/analytics', async c => {
+    const values = AnalyticsQuerySchema.parse({ date: c.req.query('date') || shanghaiDate(runtime.now()), ...(c.req.query('cursor') ? { cursor: c.req.query('cursor') } : {}) });
+    const result = await engagement.report(values.date, values.cursor); return response(result.report, c.get('requestId'), { nextCursor: result.nextCursor });
   });
   for (const name of ['creations', 'albums', 'playlists', 'fitness', 'settings'] as const) app.get(`/api/v1/${name}`, async c => { const section = await currentSection(c.req.raw, c.get('requestId'), name); return response(section.value, c.get('requestId'), { releaseId: section.releaseId }); });
   app.get('/api/v1/media/:id/:role', async c => {

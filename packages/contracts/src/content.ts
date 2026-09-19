@@ -68,7 +68,10 @@ export const GalleryBlockSchema = z.object({
   layout: z.enum(['grid', 'columns', 'stack']).default('grid'),
 }).strict();
 
-const mediaSource = { assetId: IdSchema.optional(), providerRef: ProviderRefSchema.optional() };
+// Old drafts contain assetId: '' even when an external source was selected.
+// Normalize this sentinel at both boundaries so valid provider content publishes.
+export const OptionalMediaAssetIdSchema = z.union([z.literal(''), IdSchema]).transform(value => value || undefined).optional();
+const mediaSource = { assetId: OptionalMediaAssetIdSchema, providerRef: ProviderRefSchema.optional() };
 function oneMediaSource(value: { assetId?: string; providerRef?: ProviderRef }, ctx: z.RefinementCtx) {
   if (Boolean(value.assetId) === Boolean(value.providerRef)) {
     ctx.addIssue({ code: 'custom', path: ['assetId'], message: '必须且只能提供 assetId 或 providerRef 之一' });
@@ -80,10 +83,12 @@ export const AudioBlockSchema = z.object({
   transcript: plainText(32_000, 0, false).optional(), downloadAllowed: z.boolean().default(false),
 }).strict().superRefine(oneMediaSource);
 export const VideoBlockSchema = z.object({
-  ...blockId, type: z.literal('video'), ...mediaSource, posterAssetId: IdSchema,
+  ...blockId, type: z.literal('video'), ...mediaSource, posterAssetId: OptionalMediaAssetIdSchema,
   captionsAssetId: IdSchema.optional(), transcript: plainText(32_000, 0, false).optional(),
   aspectRatio: z.number().positive().max(10).optional(),
-}).strict().superRefine(oneMediaSource);
+}).strict().superRefine(oneMediaSource).superRefine((value, ctx) => {
+  if (!value.providerRef && !value.posterAssetId) ctx.addIssue({ code: 'custom', path: ['posterAssetId'], message: '本站视频发布前请选择封面' });
+});
 export const FileBlockSchema = z.object({
   ...blockId, type: z.literal('file'), assetId: IdSchema, label: plainText(120, 1), description: plainText(1000).optional(),
 }).strict();
@@ -108,13 +113,15 @@ export const DraftProviderRefSchema = ProviderRefSchema.extend({ contentId: z.un
 export function atMostOneMediaSource(value: { assetId?: string; providerRef?: ProviderRef }, ctx: z.RefinementCtx) {
   if (value.assetId && value.providerRef) ctx.addIssue({ code: 'custom', path: ['assetId'], message: '媒体只能选择本站文件或外部平台其中一种来源' });
 }
-const draftMediaSource = { assetId: DraftAssetIdSchema.optional(), providerRef: DraftProviderRefSchema.optional() };
+// Preserve legacy empty values as JSON in private drafts. Unlike
+// DraftAssetIdSchema.optional(), this has no default to reinsert a removed key.
+const draftMediaSource = { assetId: z.union([z.literal(''), IdSchema]).optional(), providerRef: DraftProviderRefSchema.optional() };
 export const DraftContentBlockSchema = z.discriminatedUnion('type', [
   RichTextBlockSchema,
   ImageBlockSchema.extend({ assetId: DraftAssetIdSchema, alt: plainText(500).default('') }),
   GalleryBlockSchema.extend({ items: z.array(GalleryItemSchema.extend({ assetId: DraftAssetIdSchema, alt: plainText(500).default('') })).max(100).default([]) }),
   z.object({ ...AudioBlockSchema.shape, ...draftMediaSource, title: plainText(120).default('') }).strict().superRefine(atMostOneMediaSource),
-  z.object({ ...VideoBlockSchema.shape, ...draftMediaSource, posterAssetId: DraftAssetIdSchema }).strict().superRefine(atMostOneMediaSource),
+  z.object({ ...VideoBlockSchema.shape, ...draftMediaSource, posterAssetId: z.union([z.literal(''), IdSchema]).optional() }).strict().superRefine(atMostOneMediaSource),
   FileBlockSchema.extend({ assetId: DraftAssetIdSchema, label: plainText(120).default('') }),
   QuoteBlockSchema.extend({ text: plainText(5000, 0, false).default('') }),
   CodeBlockSchema.extend({ language: z.union([z.literal(''), CodeBlockSchema.shape.language]).default(''), code: z.string().max(64_000).default('') }),
@@ -138,7 +145,7 @@ const creationShape = {
   schemaVersion: z.literal(SCHEMA_VERSION).default(SCHEMA_VERSION),
 };
 
-function validateCreation(value: { blocks: ContentBlock[]; tags: string[] }, ctx: z.RefinementCtx) {
+function validateCreation(value: { blocks: { id: string }[]; tags: string[] }, ctx: z.RefinementCtx) {
   requireUniqueIds(value.blocks, ctx, ['blocks']);
   if (new Set(value.tags).size !== value.tags.length) ctx.addIssue({ code: 'custom', path: ['tags'], message: '标签不可重复' });
   if (jsonByteLength(value) > CONTENT_LIMITS.jsonBytes) ctx.addIssue({ code: 'custom', message: '创作 JSON 不得超过 256 KiB' });

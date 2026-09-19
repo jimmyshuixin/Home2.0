@@ -9,6 +9,20 @@ const partialBlocks = [
 ];
 
 describe('incomplete drafts and complete publication are distinct boundaries', () => {
+  it('publishes external video/audio and playlist drafts with legacy empty asset sentinels', () => {
+    const draft = CreationDraftSchema.parse({ title: 'External media', slug: 'external-media', blocks: [
+      { id: 'external_video', type: 'video', assetId: '', posterAssetId: '', providerRef: { provider: 'bilibili', contentId: 'BV1xx411c7mD' } },
+      { id: 'external_audio', type: 'audio', assetId: '', title: 'Music', providerRef: { provider: 'netease', contentId: '123' } },
+    ] });
+    const published = PublishableCreationSchema.parse(draft);
+    expect(published.blocks[0]).toMatchObject({ providerRef: { provider: 'bilibili', contentId: 'BV1xx411c7mD' } });
+    expect(JSON.stringify(published)).not.toContain('"assetId":""');
+    expect(CreationDraftSchema.parse({ blocks: [{ id: 'new_video', type: 'video', providerRef: { provider: 'bilibili', contentId: 'BV1xx411c7mD' } }] }).blocks[0]).not.toHaveProperty('assetId');
+    const playlist = PlaylistDraftSchema.parse({ name: 'External track', tracks: [{ id: 'track', title: 'Music', assetId: '', providerRef: { provider: 'tencent', contentId: '123' } }] });
+    expect(PublishablePlaylistSchema.safeParse(playlist).success).toBe(true);
+    expect(PublishableCreationSchema.safeParse({ ...draft, blocks: [{ id: 'local', type: 'video', assetId: 'local_asset', posterAssetId: '' }] }).success).toBe(false);
+    expect(PublishableCreationSchema.safeParse({ ...draft, blocks: [{ id: 'missing', type: 'video', assetId: '', posterAssetId: '' }] }).success).toBe(false);
+  });
   it.each([
     ['creations', CreationDraftSchema, PublishableCreationSchema, { blocks: partialBlocks }],
     ['albums', AlbumDraftSchema, PublishableAlbumSchema, { photos: [{ id: 'photo' }] }],
@@ -24,7 +38,8 @@ describe('incomplete drafts and complete publication are distinct boundaries', (
     const draft = CreationDraftSchema.parse({ blocks: partialBlocks });
     expect(draft.blocks.map(block => block.id)).toEqual(partialBlocks.map(block => block.id));
     expect(draft.blocks[0]).toMatchObject({ assetId: '', alt: '' });
-    expect(draft.blocks[4]).toMatchObject({ providerRef: { provider: 'bilibili', contentId: '' }, posterAssetId: '' });
+    expect(draft.blocks[4]).toMatchObject({ providerRef: { provider: 'bilibili', contentId: '' } });
+    expect(draft.blocks[4]).not.toHaveProperty('posterAssetId');
     expect(PublishableCreationSchema.safeParse({ ...draft, title: 'Ready title', slug: 'ready-title' }).success).toBe(false);
     expect(FitnessEntryDraftSchema.parse({}).entryDate).toBe('');
     expect(FitnessEntryDraftSchema.parse({ photos: [{ id: 'photo' }] }).photos[0]?.photoDate).toBeNull();

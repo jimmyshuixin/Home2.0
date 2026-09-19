@@ -91,6 +91,17 @@ async function readyCreation(title = 'Integration test creation'): Promise<Relea
 }
 
 describe('explicit rebuilding of published content', () => {
+  it('projects verified photography details into the public snapshot without original storage information', async () => {
+    const asset = await seedAsset('camera-photo');
+    const photography = { cameraMake: 'Sony', cameraModel: 'ILCE-7RM5', aperture: 2.8, takenDate: '2024-02-29', takenAt: '2024-02-29T10:00:00' };
+    await store.transaction(async tx => { tx.put(`media/${asset.id}`, { ...asset, metadata: { kind: 'image', detectedMime: 'image/jpeg', bytes: 16, sha256: 'b'.repeat(64), width: 8000, height: 6000, photography } }); });
+    const record = await api.records.save('creations', CreationDraftSchema, { ...creation('Camera image'), coverAssetId: asset.id }, uid);
+    const job = await finishBuild(await api.releases.create({ changes: [{ collection: 'creations', id: record.id, version: 1, action: 'publish' }], expectedReleaseId: null }, uid));
+    const snapshot = await api.releases.snapshot(job.id);
+    expect(snapshot.assets[0]?.photography).toEqual(photography);
+    expect(snapshot.assets[0]).not.toHaveProperty('originalKey'); expect(snapshot.assets[0]).not.toHaveProperty('originalName');
+  });
+
   it('rejects empty ordinary releases, mixed draft rebuilds and a rebuild with no public base', async () => {
     const session = await login();
     for (const body of [
@@ -700,7 +711,7 @@ describe('actual upload parts and atomic capacity accounting', () => {
   it('accepts the exact decimal 512 MB declaration and rejects larger uploads before reserving', async () => {
     const upload = await api.media.start({ kind: 'video', originalName: 'test.mp4', expectedMime: 'video/mp4', expectedBytes: 512_000_000 }, uid);
     expect(upload.totalParts).toBe(Math.ceil(512_000_000 / PART_SIZE));
-    expect(await api.media.quota()).toMatchObject({ reservedBytes: 512_000_000, limitBytes: 10_000_000_000 });
+    expect(await api.media.quota()).toMatchObject({ reservedBytes: 512_000_000, limitBytes: MEDIA_LIMITS.totalBytes });
     await expect(api.media.start({ kind: 'video', originalName: 'test.mp4', expectedMime: 'video/mp4', expectedBytes: 512_000_001 }, uid)).rejects.toThrow();
     await api.media.abort(upload.uploadId, uid);
     expect(await api.media.quota()).toMatchObject({ usedBytes: 0, reservedBytes: 0 });

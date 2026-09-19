@@ -94,9 +94,9 @@ export class Processing {
       assert(job.state === 'claimed' && asset?.status === 'processing', 'MEDIA_STATE_CONFLICT', 409, '媒体处理状态已改变');
       const metadata = plan.metadata;
       assert(metadata.kind === asset.kind && metadata.bytes === asset.originalBytes && metadata.detectedMime === asset.expectedMime && (!asset.expectedSha256 || metadata.sha256 === asset.expectedSha256), 'DETECTED_METADATA_MISMATCH', 422, '实际检测结果与上传声明不一致');
-      assert(canReserveMediaBytes(quota.usedBytes, quota.reservedBytes, bytes), 'MEDIA_QUOTA_EXCEEDED', 409, '原文件与全部衍生版本合计将超过 10 GB');
+      assert(canReserveMediaBytes(quota.usedBytes, quota.reservedBytes, bytes), 'MEDIA_QUOTA_EXCEEDED', 409, '原文件、衍生版本与上传预留合计将超过 9 GB；另留 1 GB 给网站发布。');
       const variants: VariantTask[] = plan.variants.map(item => ({ ...item, key: `variants/${assetId}/${runId}/${item.role}`, partSize: PART_SIZE, totalParts: Math.ceil(item.bytes / PART_SIZE), state: 'planned', parts: [], leases: {} }));
-      tx.put('system/media_quota', { ...quota, reservedBytes: quota.reservedBytes + bytes });
+      tx.put('system/media_quota', { ...quota, limitBytes: MEDIA_LIMITS.totalBytes, reservedBytes: quota.reservedBytes + bytes });
       tx.put(`processing/${assetId}`, { ...job, state: 'planned', metadata, planHash, reservedBytes: bytes, variants, updatedAt: this.now() });
     });
     for (const item of plan.variants) await this.initializeVariant(assetId, runId, item.role);

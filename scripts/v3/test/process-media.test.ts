@@ -30,6 +30,17 @@ describe('real media processing', () => {
     }
     expect(await hashFile(input)).toBe(sourceHash)
   })
+  it('extracts safe camera tags and capture date from a real JPEG while stripping public image metadata', async () => {
+    const input = resolve(root, 'camera.jpg')
+    await sharp({ create: { width: 40, height: 30, channels: 3, background: '#345344' } }).jpeg().withExif({
+      IFD0: { Make: 'Canon', Model: 'EOS R5', Artist: 'PRIVATE OWNER' },
+      IFD2: { DateTimeOriginal: '2024:02:29 10:22:33', LensModel: 'RF24-70mm F2.8 L IS USM', BodySerialNumber: 'PRIVATE SERIAL', FocalLength: '50/1', ExposureTime: '1/125', FNumber: '28/10', ISOSpeedRatings: '400' },
+    }).toFile(input)
+    const result = await processMedia(input, await declaration(input, 'image', 'image/jpeg'), resolve(root, 'camera-output'))
+    expect(result.metadata.kind === 'image' && result.metadata.photography).toMatchObject({ cameraMake: 'Canon', cameraModel: 'EOS R5', lensModel: 'RF24-70mm F2.8 L IS USM', takenDate: '2024-02-29', takenAt: '2024-02-29T10:22:33', focalLengthMm: 50, exposureSeconds: 1 / 125, aperture: 2.8, iso: 400 })
+    expect(JSON.stringify(result.metadata)).not.toContain('PRIVATE')
+    for (const item of result.variants) expect((await sharp(item.path).metadata()).exif).toBeUndefined()
+  })
   it('decodes a real WAV and produces playable AAC with verified duration', async () => {
     const input = resolve(root, 'tone.wav')
     ffmpeg(['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '1', input])

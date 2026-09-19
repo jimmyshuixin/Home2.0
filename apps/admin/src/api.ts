@@ -41,7 +41,7 @@ export interface DraftRecord<T = Record<string, unknown>> {
   draftRevisionId: string; lastPublishedRevisionId: string | null; createdAt: string; updatedAt: string;
 }
 export type Collection = 'creations' | 'albums' | 'fitness' | 'playlists';
-export interface MediaItem { id: string; kind: 'image' | 'audio' | 'video' | 'file'; originalName?: string; originalBytes: number; totalBytes?: number; version?: number; category?: string; lifecycle?: 'active' | 'trash' | 'purging' | 'deleted'; purgeJobId?: string; createdAt?: string; updatedAt?: string; processingStatus?: string; status?: string; previewUrl?: string; metadata?: { width?: number; height?: number }; variants: { role: string; url?: string; width?: number; height?: number }[]; error?: { code: string; message: string } }
+export interface MediaItem { id: string; kind: 'image' | 'audio' | 'video' | 'file'; originalName?: string; originalBytes: number; totalBytes?: number; version?: number; category?: string; lifecycle?: 'active' | 'trash' | 'purging' | 'deleted'; purgeJobId?: string; createdAt?: string; updatedAt?: string; processingStatus?: string; status?: string; previewUrl?: string; metadata?: { width?: number; height?: number; photography?: { takenDate?: string; cameraMake?: string; cameraModel?: string; lensModel?: string; aperture?: number; exposureSeconds?: number; iso?: number; focalLengthMm?: number } }; variants: { role: string; url?: string; width?: number; height?: number }[]; error?: { code: string; message: string } }
 export function mediaPreview(item: MediaItem): string | undefined {
   if ((item.processingStatus ?? item.status) !== 'ready') return;
   const variant = item.variants.find(value => ['thumb', 'content'].includes(value.role)) ?? item.variants[0];

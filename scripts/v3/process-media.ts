@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import sharp from 'sharp'
+import { extractPhotographyMetadata } from './photo-metadata'
 import { z } from 'zod'
 import { UploadMetadataSchema, DetectedMediaMetadataSchema, PublicMediaVariantSchema, MEDIA_LIMITS, type UploadMetadata, type DetectedMediaMetadata, type MediaVariantRoleSchema, type AllowedMimeSchema } from '@xvyin/contracts'
 
@@ -136,15 +137,19 @@ export async function processMedia(inputPath: string, declaration: UploadMetadat
     const base = { kind: declared.kind, detectedMime, bytes: inputStat.size, sha256 }, variants: ProcessedVariant[] = []
     let metadata: DetectedMediaMetadata
     if (declared.kind === 'image') {
-      const details = await sharp(staged, { limitInputPixels: MEDIA_LIMITS.imagePixels, failOn: 'error' }).metadata()
-      check(details.width && details.height && details.width * details.height <= MEDIA_LIMITS.imagePixels, 'IMAGE_PIXEL_LIMIT', '图片不得超过 3600 万像素。')
+      // One file and one derivative at a time. Libvips' operation cache is
+      // bounded; pixel and decoder time limits also apply to highly compressed inputs.
+      sharp.cache({ memory: 32, files: 0, items: 20 }); sharp.concurrency(1)
+      const details = await sharp(staged, { limitInputPixels: MEDIA_LIMITS.imagePixels, failOn: 'error', sequentialRead: true }).timeout({ seconds: 120 }).metadata()
+      check(details.width && details.height && details.width * details.height <= MEDIA_LIMITS.imagePixels, 'IMAGE_PIXEL_LIMIT', '图片不得超过 1.5 亿像素。')
       check((details.pages || 1) === 1, 'ANIMATED_IMAGE_UNSUPPORTED', '请上传静态图片；不会静默丢弃动画帧。')
       for (const [role, size] of [['thumb', 384], ['content', 960], ['large', 1600]] as const) {
         const path = resolve(work, `${role}.webp`)
-        const info = await sharp(staged, { limitInputPixels: MEDIA_LIMITS.imagePixels, failOn: 'error' }).rotate().resize({ width: size, height: size, fit: 'inside', withoutEnlargement: true }).webp({ quality: role === 'thumb' ? 80 : 85, effort: 4 }).timeout({ seconds: 120 }).toFile(path)
+        const info = await sharp(staged, { limitInputPixels: MEDIA_LIMITS.imagePixels, failOn: 'error', sequentialRead: true }).rotate().resize({ width: size, height: size, fit: 'inside', withoutEnlargement: true }).webp({ quality: role === 'thumb' ? 80 : 85, effort: 4 }).timeout({ seconds: 120 }).toFile(path)
         variants.push(await variant(path, role, 'image/webp', { width: info.width, height: info.height }))
       }
-      metadata = DetectedMediaMetadataSchema.parse({ ...base, width: details.width, height: details.height })
+      const photography = extractPhotographyMetadata(details.exif), rotated = (details.orientation || 1) >= 5
+      metadata = DetectedMediaMetadataSchema.parse({ ...base, width: rotated ? details.height : details.width, height: rotated ? details.width : details.height, ...(photography ? { photography } : {}) })
     } else if (declared.kind === 'audio' || declared.kind === 'video') {
       const info = await probe(staged), durationMs = duration(info)
       const visual = info.streams.filter((stream) => stream.codec_type === 'video' && !stream.disposition?.attached_pic)

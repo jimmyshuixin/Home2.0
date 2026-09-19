@@ -19,9 +19,10 @@ describe('media declarations and quota boundary', () => {
     expect(UploadMetadataSchema.safeParse({ kind: 'image', originalName: 'fake.jpg', expectedMime: 'video/mp4', expectedBytes: 100 }).success).toBe(false);
   });
 
-  it('accounts for in-flight reservations at the total 10 GB boundary', () => {
-    expect(canReserveMediaBytes(9_000_000_000, 488_000_000, 512_000_000)).toBe(true);
-    expect(canReserveMediaBytes(9_000_000_000, 488_000_001, 512_000_000)).toBe(false);
+  it('accounts for in-flight reservations while retaining 1 GB of free-tier headroom', () => {
+    expect(MEDIA_LIMITS.totalBytes + MEDIA_LIMITS.infrastructureReserveBytes).toBe(MEDIA_LIMITS.freeTierBytes);
+    expect(canReserveMediaBytes(8_000_000_000, 488_000_000, 512_000_000)).toBe(true);
+    expect(canReserveMediaBytes(8_000_000_000, 488_000_001, 512_000_000)).toBe(false);
     expect(canReserveMediaBytes(MEDIA_LIMITS.totalBytes, 0, 1)).toBe(false);
     expect(canReserveMediaBytes(-1, 0, 1)).toBe(false);
     expect(canReserveMediaBytes(0, 0, NaN)).toBe(false);
@@ -29,9 +30,16 @@ describe('media declarations and quota boundary', () => {
   });
 
   it('rejects a decoded image exceeding the pixel ceiling even if its compressed byte size is small', () => {
-    const decoded = { kind: 'image', detectedMime: 'image/png', bytes: 100, sha256: 'a'.repeat(64), width: 6000, height: 6000 };
+    const decoded = { kind: 'image', detectedMime: 'image/png', bytes: 100, sha256: 'a'.repeat(64), width: 15000, height: 10000 };
     expect(DetectedMediaMetadataSchema.safeParse(decoded).success).toBe(true);
-    expect(DetectedMediaMetadataSchema.safeParse({ ...decoded, height: 6001 }).success).toBe(false);
+    expect(DetectedMediaMetadataSchema.safeParse({ ...decoded, height: 10001 }).success).toBe(false);
+  });
+
+  it('accepts camera images through exactly 100 decimal MB', () => {
+    const image = { kind: 'image', originalName: 'camera.jpg', expectedMime: 'image/jpeg', expectedBytes: 100_000_000 };
+    expect(UploadMetadataSchema.safeParse(image).success).toBe(true);
+    expect(UploadMetadataSchema.safeParse({ ...image, expectedBytes: 100_000_001 }).success).toBe(false);
+    expect(UploadMetadataSchema.safeParse({ ...image, expectedBytes: 100 * 1024 * 1024 }).success).toBe(false);
   });
 
   it('keeps private storage fields out of public projections', () => {

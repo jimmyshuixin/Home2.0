@@ -50,6 +50,36 @@ async function expectOneReservation() {
 }
 
 describe('idempotent upload start with real R2 multipart initialization', () => {
+  it('admits a 100 MB image using existing bounded parts, and rejects one byte over', async () => {
+    const upload = await media.start({ ...metadata, expectedBytes: 100_000_000 }, 'admin');
+    expect(upload.partSize).toBe(5 * 1024 * 1024); expect(upload.totalParts).toBe(20);
+    await expect(media.start({ ...metadata, expectedBytes: 100_000_001 }, 'admin')).rejects.toHaveProperty('name', 'ZodError');
+    await media.abort(upload.uploadId, 'admin');
+    expect(await media.quota()).toMatchObject({ reservedBytes: 0, usedBytes: 0 });
+  });
+
+  it('streams a full 100 MB upload through 20 real R2 parts and reconciles completion once', async () => {
+    const upload = await media.start({ ...metadata, expectedBytes: 100_000_000 }, 'admin');
+    for (let part = 1; part <= upload.totalParts; part++) {
+      const bytes = Math.min(upload.partSize, 100_000_000 - (part - 1) * upload.partSize);
+      const body = new Uint8Array(bytes); body[0] = part;
+      await media.part(upload.uploadId, part, new Request('https://test.invalid/upload', { method: 'PUT', body }), 'admin');
+    }
+    const asset = await media.complete(upload.uploadId, 'admin');
+    expect(asset).toMatchObject({ originalBytes: 100_000_000, status: 'processing' });
+    expect((await actualBucket.head(asset.originalKey))?.size).toBe(100_000_000);
+    expect(await media.complete(upload.uploadId, 'admin')).toEqual(asset);
+    expect(await media.quota()).toMatchObject({ usedBytes: 100_000_000, reservedBytes: 0 });
+    await actualBucket.delete(asset.originalKey);
+  }, 60_000);
+
+  it('reports the effective free media budget for an older quota without deleting stored files', async () => {
+    await store.transaction(async tx => { tx.put('system/media_quota', { usedBytes: 9_500_000_000, reservedBytes: 0, limitBytes: 10_000_000_000 }); });
+    expect(await media.quota()).toEqual({ usedBytes: 9_500_000_000, reservedBytes: 0, limitBytes: 9_000_000_000 });
+    await expect(media.start(metadata, 'admin')).rejects.toMatchObject({ code: 'MEDIA_QUOTA_EXCEEDED' });
+    expect((await media.quota()).usedBytes).toBe(9_500_000_000);
+  });
+
   it('returns the original upload after a lost HTTP response without reserving twice', async () => {
     const key = crypto.randomUUID(), first = await media.start(metadata, 'admin', key);
     // The client did not receive first, so sends the identical POST again.

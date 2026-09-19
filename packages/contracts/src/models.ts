@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { IdSchema, plainText, requireUniqueIds, SlugSchema, SortOrderSchema, UtcTimestampSchema, VersionSchema } from './common';
-import { atMostOneMediaSource, DraftAssetIdSchema, DraftProviderRefSchema, ProviderRefSchema } from './content';
+import { atMostOneMediaSource, DraftAssetIdSchema, DraftProviderRefSchema, OptionalMediaAssetIdSchema, ProviderRefSchema } from './content';
 import { CalendarDateSchema, fitnessDayCount } from './dates';
 import { CONTENT_LIMITS, FITNESS_TIMEZONE } from './limits';
 
@@ -91,7 +91,7 @@ export type AlbumPhoto = z.infer<typeof AlbumPhotoSchema>;
 
 export const PlaylistTrackSchema = z.object({
   id: IdSchema, title: plainText(120, 1), artist: plainText(120).default(''),
-  assetId: IdSchema.optional(), providerRef: ProviderRefSchema.optional(),
+  assetId: OptionalMediaAssetIdSchema, providerRef: ProviderRefSchema.optional(),
   coverAssetId: IdSchema.nullable().default(null), sortOrder: SortOrderSchema,
 }).strict().superRefine((value, ctx) => {
   if (Boolean(value.assetId) === Boolean(value.providerRef)) ctx.addIssue({ code: 'custom', path: ['assetId'], message: '曲目必须且只能有一个媒体来源' });
@@ -100,7 +100,7 @@ export const PlaylistTrackSchema = z.object({
   }
 });
 const PlaylistTrackDraftSchema = z.object({ ...PlaylistTrackSchema.shape,
-  title: plainText(120).default(''), assetId: DraftAssetIdSchema.optional(),
+  title: plainText(120).default(''), assetId: z.union([z.literal(''), IdSchema]).optional(),
   providerRef: DraftProviderRefSchema.optional(),
 }).strict().superRefine(atMostOneMediaSource).superRefine((value, ctx) => {
   if (value.providerRef && !['tencent', 'netease'].includes(value.providerRef.provider)) ctx.addIssue({ code: 'custom', path: ['providerRef', 'provider'], message: '歌单只接受预设音乐服务' });
