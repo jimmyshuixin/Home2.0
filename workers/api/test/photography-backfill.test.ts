@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { PhotographyBackfill } from '../src/photography-backfill';
 import { MemoryStore } from '../src/store/memory';
@@ -21,6 +21,18 @@ async function seed(id = 'photo', overrides: Partial<MediaAsset> = {}) {
   return {asset,source,hash};
 }
 describe('metadata-only existing photo maintenance', () => {
+  it('dispatches the fixed maintenance task only from an authenticated administrator with CSRF', async () => {
+    const dispatchMedia=vi.fn(async()=>{});
+    const auth: AuthProvider = {signIn:async()=>({uid:'admin',authTime:now/1000}),assertSession:async()=>{},changePassword:async()=>{},requestPasswordReset:async()=>{},confirmPasswordReset:async()=>({uid:'admin'}),revokeAllSessions:async()=>{}};
+    const api=createApi({store,bucket,auth,now:()=>now,privacySalt:'test-only-salt-01234567890123456789',secureCookies:true,allowedOrigins:[origin],adminUsername:'test',codeSha,dispatchMedia});
+    const session=await api.sessions.create({uid:'admin',authTime:now/1000}), path=origin+'/api/v1/admin/media/photography-backfill';
+    const send=(headers:Record<string,string>)=>api.app.fetch(new Request(path,{method:'POST',headers:{origin,'content-type':'application/json',...headers},body:'{}'}));
+    expect((await send({})).status).toBe(401);
+    expect((await send({cookie:session.cookie.split(';')[0]!})).status).toBe(403);
+    expect(dispatchMedia).not.toHaveBeenCalled();
+    expect((await send({cookie:session.cookie.split(';')[0]!,'x-csrf-token':session.session.csrfToken})).status).toBe(200);
+    expect(dispatchMedia).toHaveBeenCalledExactlyOnceWith('maintenance-photography-v1');
+  });
   it('streams a verified private original and only adds metadata, preserving quota, drafts and all object bytes', async () => {
     const {asset,hash,source} = await seed();
     await store.transaction(async tx => { tx.put('system/media_quota',{usedBytes:123,reservedBytes:7}); tx.put('albums/draft',{title:'unsaved unpublished content'}); });

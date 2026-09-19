@@ -12,6 +12,16 @@ const pageItems = computed(() => items.value.slice((Math.min(page.value, pageCou
 async function more() { await load(true); page.value = pageCount.value; }
 const editDialog = ref<HTMLDialogElement>(), selected = ref<MediaItem>(), action = ref<'category'|'trash'>('category'), category = ref(''), saving = ref(false), actionError = ref('');
 const purgeItem = ref<MediaItem>(), purgeId = ref(''), showPurge = ref(false);
+const backfillBusy = ref(false), backfillNotice = ref(''), backfillError = ref('');
+async function identifyOldPhotos() {
+  if (backfillBusy.value) return;
+  backfillBusy.value = true; backfillNotice.value = ''; backfillError.value = '';
+  try {
+    await api.request('/admin/media/photography-backfill', { method: 'POST', body: {} });
+    backfillNotice.value = '后台已开始识别旧照片参数。完成后，可在发布中心重建公开页面，让网站显示识别到的摄影信息。';
+  } catch (error) { backfillError.value = errorMessage(error); }
+  finally { backfillBusy.value = false; }
+}
 const stateText: Record<string,string> = {ready:'可用',processing:'处理中',failed:'处理失败'};
 async function edit(item: MediaItem, mode: 'category'|'trash') { selected.value = item; action.value = mode; category.value = item.category || ''; actionError.value = ''; await nextTick(); editDialog.value?.showModal(); }
 async function save() {
@@ -27,7 +37,7 @@ onMounted(() => { try { const saved = sessionStorage.getItem('xvyin-media-purge-
 <template><section>
   <MediaUpload @changed="load()"/>
   <div v-if="quota" class="quota panel mt24"><div class="flex between"><span>媒体已用 {{ formatBytes(quota.usedBytes) }} · 上传预留 {{ formatBytes(quota.reservedBytes) }}</span><strong>媒体上限 {{ formatBytes(quota.limitBytes) }}</strong></div><progress :max="quota.limitBytes" :value="quota.usedBytes + quota.reservedBytes" aria-label="媒体容量使用"></progress><p class="hint">包含媒体原件和已处理版本；历史网站构建还会占用额外存储。回收站文件在永久删除前仍计入容量。</p></div>
-  <div class="library-heading mt32"><div class="tabs" aria-label="媒体范围"><button :class="{active:filters.lifecycle === 'active'}" :aria-pressed="filters.lifecycle === 'active'" @click="filters.lifecycle = 'active'">媒体库</button><button :class="{active:filters.lifecycle === 'trash'}" :aria-pressed="filters.lifecycle === 'trash'" @click="filters.lifecycle = 'trash'">回收站</button></div><button type="button" :disabled="loading" @click="load()">刷新</button></div>
+  <div class="library-heading mt32"><div class="tabs" aria-label="媒体范围"><button :class="{active:filters.lifecycle === 'active'}" :aria-pressed="filters.lifecycle === 'active'" @click="filters.lifecycle = 'active'">媒体库</button><button :class="{active:filters.lifecycle === 'trash'}" :aria-pressed="filters.lifecycle === 'trash'" @click="filters.lifecycle = 'trash'">回收站</button></div><div class="library-actions"><button type="button" :disabled="backfillBusy" :aria-busy="backfillBusy" @click="identifyOldPhotos">{{backfillBusy?'正在提交…':'识别旧照片参数'}}</button><button type="button" :disabled="loading" @click="load()">刷新</button></div></div><p v-if="backfillNotice" class="notice success mt16" role="status">{{backfillNotice}}</p><p v-if="backfillError" class="notice error mt16" role="alert">{{backfillError}}</p>
   <p v-if="filters.lifecycle === 'trash'" class="hint mt16">可以恢复文件。永久删除前会检查所有引用；仍被内容或历史版本使用的文件会保留。</p>
   <p v-if="purgeId" class="notice mt16">有一个媒体清理任务尚未结束。<button type="button" @click="purge()">继续查看</button></p>
   <div class="panel mt24"><MediaFilters :filters="filters"/></div>
@@ -40,4 +50,4 @@ onMounted(() => { try { const saved = sessionStorage.getItem('xvyin-media-purge-
   <dialog ref="editDialog" class="modal" aria-labelledby="media-edit-title" @cancel="event => { if (saving) event.preventDefault(); }"><header class="modal-head"><h2 id="media-edit-title">{{ action === 'category' ? '编辑媒体分类' : '移入回收站' }}</h2><button type="button" aria-label="关闭" :disabled="saving" @click="editDialog?.close()">×</button></header><form class="modal-body" @submit.prevent="save"><p class="break">{{ selected?.originalName }}</p><label v-if="action === 'category'" class="category-label mt24">分类名称<input v-model="category" maxlength="40" placeholder="例如：日常、健身、旅行"><small class="hint">留空即为未分类；同名分类可以一起筛选。</small></label><p v-else class="mt24">文件将从媒体选择器移除，已有页面的引用继续有效。之后可以在回收站恢复。</p><p v-if="actionError" class="notice error mt16" role="alert">{{ actionError }}</p><div class="flex mt24"><button type="submit" class="primary" :disabled="saving">{{ saving ? '正在保存…' : action === 'category' ? '保存分类' : '确认移入回收站' }}</button><button type="button" :disabled="saving" @click="editDialog?.close()">取消</button></div></form></dialog>
   <MediaPurge v-if="showPurge" :item="purgeItem" :resume-id="purgeId || undefined" @close="closedPurge" @changed="load()"/>
 </section></template>
-<style scoped>.media-grid{grid-template-columns:repeat(auto-fill,minmax(245px,1fr))}.library-heading{display:flex;justify-content:space-between;align-items:center;gap:16px}.tabs{display:flex;gap:8px}.tabs .active{background:var(--green);color:white}.category{font-size:12px;overflow-wrap:anywhere;color:var(--green)}.card-actions{display:flex;flex-wrap:wrap;gap:8px}.card-actions button{font-size:12px;padding:7px 10px}.category-label{display:grid;gap:10px}@media(max-width:600px){.media-grid{grid-template-columns:1fr}.library-heading{gap:8px}}</style>
+<style scoped>.media-grid{grid-template-columns:repeat(auto-fill,minmax(245px,1fr))}.library-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}.library-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.tabs{display:flex;gap:8px}.tabs .active{background:var(--green);color:white}.category{font-size:12px;overflow-wrap:anywhere;color:var(--green)}.card-actions{display:flex;flex-wrap:wrap;gap:8px}.card-actions button{font-size:12px;padding:7px 10px}.category-label{display:grid;gap:10px}@media(max-width:600px){.media-grid{grid-template-columns:1fr}.library-heading{gap:8px}.library-actions{width:100%;justify-content:flex-end}}</style>

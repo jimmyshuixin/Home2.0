@@ -125,6 +125,12 @@ export function createApi(runtime: Runtime) {
     return response(page.items, c.get('requestId'), { nextCursor: page.nextCursor, scanned: page.scanned, catalogReady: page.catalogReady, quota: await media.quota() });
   });
   app.get('/api/v1/admin/media/catalog', async c => response(await library.catalogStatus(), c.get('requestId')));
+  app.post('/api/v1/admin/media/photography-backfill', async c => {
+    z.object({}).strict().parse(await input(c.req.raw, 1024));
+    assert(runtime.dispatchMedia, 'MEDIA_NOT_CONFIGURED', 503, '旧照片自动识别尚未配置');
+    await runtime.dispatchMedia('maintenance-photography-v1');
+    return response({ started: true }, c.get('requestId'));
+  });
   app.post('/api/v1/admin/media/catalog/advance', async c => response(await library.advanceCatalog(), c.get('requestId')));
   app.get('/api/v1/admin/media/duplicates', async c => response(await library.findDuplicate({ ...c.req.query(), bytes: Number(c.req.query('bytes')) } as Parameters<MediaLibrary['findDuplicate']>[0]), c.get('requestId')));
   app.get('/api/v1/admin/media/purge-jobs/:jobId', async c => response(publicPurge(await library.getPurge(c.req.param('jobId'), c.get('session').uid)), c.get('requestId')));
