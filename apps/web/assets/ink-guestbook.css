@@ -28,8 +28,30 @@
   flex: 0 1 auto; min-width: 0; max-width: 30%; margin: 0; overflow: hidden; text-overflow: ellipsis;
   color: var(--ink, #171715); font: 400 15px/1.6 var(--serif); opacity: .68;
 }
-.ink-shell.freepaper-shell .guestbook-panel .danmaku-animated li[data-entering="true"] { animation: ink-comment-arrive .7s ease-out both; }
-.ink-shell.freepaper-shell .guestbook-panel .danmaku-paused li { animation-play-state: paused; }
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-lane-list { display: block; list-style: none; margin: 0; padding: 0; }
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-lane-list .danmaku-lane {
+  position: relative; top: auto; left: auto; width: 100%; max-width: none; height: 43px; margin: 0; padding: 0;
+  border: 0; background: transparent; overflow: hidden; white-space: nowrap; animation: none;
+}
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-track {
+  display: flex; width: max-content; height: 43px;
+  animation: ink-comments-scroll var(--lane-duration, 30s) linear infinite;
+  animation-play-state: paused; will-change: transform;
+}
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-track.is-ready { animation-play-state: running; }
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-paused .danmaku-track { animation-play-state: paused; }
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-cycle { display: flex; flex: 0 0 auto; }
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-sequence {
+  display: flex; align-items: center; flex: 0 0 auto; width: max-content; gap: 56px; padding-right: 56px;
+}
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-message {
+  display: inline-flex; align-items: baseline; flex: 0 0 auto; gap: 16px; margin: 0;
+  color: var(--ink, #171715); font: 400 17px/1.6 var(--serif); white-space: nowrap;
+}
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-message > span { margin: 0; }
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-message .small {
+  margin: 0; color: var(--ink, #171715); font: 400 15px/1.6 var(--serif); opacity: .68;
+}
 .ink-shell.freepaper-shell .guestbook-panel > .guestbook-actions { display: flex; gap: 0; margin: 0; }
 .ink-shell.freepaper-shell .guestbook-panel > .guestbook-actions > .guestbook-write {
   flex: 0 0 auto; width: auto; min-height: 44px; padding: 0 2px; justify-content: flex-start; gap: 10px;
@@ -40,7 +62,7 @@
 .ink-shell.freepaper-shell .guestbook-panel .guestbook-secondary { margin-top: 44px; }
 .ink-shell.freepaper-shell .guestbook-panel .guestbook-secondary .text-link { min-height: 44px; margin: 0; color: var(--green, #123e31); font-size: 14px; text-decoration: none; }
 .ink-shell.freepaper-shell .guestbook-panel .guestbook-secondary p { margin: 0; font-size: 12px; }
-@keyframes ink-comment-arrive { from { transform: translateX(30px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes ink-comments-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 @media (max-width: 850px) {
   .ink-shell.freepaper-shell .guestbook-panel { margin: 36px 0 0; padding: 0; }
   .ink-shell.freepaper-shell .guestbook-panel .guestbook-secondary { margin-top: 20px; }
@@ -51,6 +73,8 @@
   .ink-shell.freepaper-shell .guestbook-panel .danmaku-controls { gap: 0; font-size: 14px; }
   .ink-shell.freepaper-shell .guestbook-panel .danmaku-list li { gap: 12px; font-size: 16px; }
   .ink-shell.freepaper-shell .guestbook-panel .danmaku-list .small { font-size: 13px; }
+  .ink-shell.freepaper-shell .guestbook-panel .danmaku-message { font-size: 16px; }
+  .ink-shell.freepaper-shell .guestbook-panel .danmaku-message .small { font-size: 13px; }
 }
 @media (max-width: 350px) {
   .ink-shell.freepaper-shell .guestbook-panel > .panel-head { padding-right: 110px; }
@@ -58,5 +82,8 @@
   .ink-shell.freepaper-shell .guestbook-panel .danmaku-controls { right: -6px; font-size: 13px; }
   .ink-shell.freepaper-shell .guestbook-panel .danmaku-controls button { padding: 6px; }
 }
-@media (prefers-reduced-motion: reduce) { .ink-shell.freepaper-shell .guestbook-panel .danmaku-list li { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .ink-shell.freepaper-shell .guestbook-panel .danmaku-list li,
+  .ink-shell.freepaper-shell .guestbook-panel .danmaku-track { animation: none; }
+}
 

@@ -1,26 +1,19 @@
-export type CommentLaneState<T> = {
-  tracks: Array<{ comment: T; entering: boolean }>
-  nextComment: number
-  nextTrack: number
+/** Partition public comments into independent horizontal tracks, without synthetic content. */
+export function createCommentLanes<T>(comments: readonly T[]): T[][] {
+  const lanes: T[][] = Array.from({ length: Math.min(3, comments.length) }, () => [])
+  comments.forEach((comment, index) => lanes[index % lanes.length]?.push(comment))
+  return lanes
 }
 
-/** Show real content immediately, before the first timed replacement. */
-export function createCommentLanes<T>(comments: readonly T[]): CommentLaneState<T> {
-  return {
-    tracks: comments.slice(0, 3).map(comment => ({ comment, entering: false })),
-    nextComment: 3,
-    nextTrack: 0,
-  }
-}
+export type CommentLoop = { repetitions: number; cycleWidth: number; durationSeconds: number }
 
-/** Replace one lane without mutating the API result or the previous visible state. */
-export function advanceCommentLanes<T>(comments: readonly T[], state: CommentLaneState<T>): CommentLaneState<T> {
-  if (comments.length <= 3) return state
-  const comment = comments[state.nextComment % comments.length]
-  if (comment === undefined) return state
-  return {
-    tracks: state.tracks.map((track, index) => index === state.nextTrack ? { comment, entering: true } : track),
-    nextComment: (state.nextComment + 1) % comments.length,
-    nextTrack: (state.nextTrack + 1) % 3,
+/** Two identical cycles cover the viewport throughout a full leftward translation. */
+export function measureCommentLoop(viewportWidth: number, sequenceWidth: number, pixelsPerSecond = 26): CommentLoop {
+  if (!Number.isFinite(viewportWidth) || viewportWidth <= 0 || !Number.isFinite(sequenceWidth) || sequenceWidth <= 0) {
+    return { repetitions: 1, cycleWidth: 0, durationSeconds: 0 }
   }
+  const speed = Number.isFinite(pixelsPerSecond) && pixelsPerSecond > 0 ? pixelsPerSecond : 26
+  const repetitions = Math.max(1, Math.ceil(viewportWidth / sequenceWidth))
+  const cycleWidth = sequenceWidth * repetitions
+  return { repetitions, cycleWidth, durationSeconds: cycleWidth / speed }
 }
