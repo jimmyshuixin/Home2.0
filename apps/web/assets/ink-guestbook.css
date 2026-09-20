@@ -1,0 +1,62 @@
+/* Three quiet, readable lanes preserve the approved ink-paper composition. */
+.ink-shell.freepaper-shell .guestbook-panel { min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; }
+.ink-shell.freepaper-shell .guestbook-panel > .panel-head { min-height: 42px; padding-right: 144px; }
+.ink-shell.freepaper-shell .guestbook-panel .panel-head h3 { font: 400 28px/1.5 var(--serif); color: var(--ink, #171715); }
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-controls {
+  position: absolute; top: 0; right: -8px; display: flex; height: 42px; margin: 0; gap: 6px;
+  font: 400 16px/1.5 var(--serif);
+}
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-controls button {
+  min-height: 44px; padding: 8px; border: 0; border-radius: 0; background: transparent; color: var(--green, #123e31);
+}
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-controls button:hover:not(:disabled) { color: var(--ink, #171715); }
+.ink-shell.freepaper-shell .guestbook-panel .danmaku {
+  height: 129px; margin: 8px 0 0; padding: 0; border: 0; border-radius: 0; background: transparent;
+  scrollbar-width: thin; scrollbar-color: var(--green, #123e31) transparent;
+}
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-list { display: block; list-style: none; margin: 0; padding: 0; }
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-list li {
+  position: relative; top: auto; left: auto; display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  width: 100%; max-width: none; min-height: 43px; height: 43px; margin: 0; padding: 0 2px; overflow: hidden;
+  border: 0; border-radius: 0; background: transparent; color: var(--ink, #171715);
+  font: 400 17px/1.6 var(--serif); white-space: nowrap; animation: none;
+}
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-list li p {
+  display: block; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-list .small {
+  flex: 0 1 auto; min-width: 0; max-width: 30%; margin: 0; overflow: hidden; text-overflow: ellipsis;
+  color: var(--ink, #171715); font: 400 15px/1.6 var(--serif); opacity: .68;
+}
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-animated li[data-entering="true"] { animation: ink-comment-arrive .7s ease-out both; }
+.ink-shell.freepaper-shell .guestbook-panel .danmaku-paused li { animation-play-state: paused; }
+.ink-shell.freepaper-shell .guestbook-panel > .guestbook-actions { display: flex; gap: 0; margin: 0; }
+.ink-shell.freepaper-shell .guestbook-panel > .guestbook-actions > .guestbook-write {
+  flex: 0 0 auto; width: auto; min-height: 44px; padding: 0 2px; justify-content: flex-start; gap: 10px;
+  border: 0; border-radius: 0; background: transparent; color: var(--green, #123e31);
+  font: 400 18px/1.6 var(--serif); text-decoration: none; box-shadow: none;
+}
+.ink-shell.freepaper-shell .guestbook-panel > .guestbook-actions > .guestbook-write:hover { background: transparent; color: var(--ink, #171715); text-decoration: none; }
+.ink-shell.freepaper-shell .guestbook-panel .guestbook-secondary { margin-top: 44px; }
+.ink-shell.freepaper-shell .guestbook-panel .guestbook-secondary .text-link { min-height: 44px; margin: 0; color: var(--green, #123e31); font-size: 14px; text-decoration: none; }
+.ink-shell.freepaper-shell .guestbook-panel .guestbook-secondary p { margin: 0; font-size: 12px; }
+@keyframes ink-comment-arrive { from { transform: translateX(30px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@media (max-width: 850px) {
+  .ink-shell.freepaper-shell .guestbook-panel { margin: 36px 0 0; padding: 0; }
+  .ink-shell.freepaper-shell .guestbook-panel .guestbook-secondary { margin-top: 20px; }
+}
+@media (max-width: 480px) {
+  .ink-shell.freepaper-shell .guestbook-panel > .panel-head { padding-right: 120px; }
+  .ink-shell.freepaper-shell .guestbook-panel .panel-head h3 { font-size: 25px; }
+  .ink-shell.freepaper-shell .guestbook-panel .danmaku-controls { gap: 0; font-size: 14px; }
+  .ink-shell.freepaper-shell .guestbook-panel .danmaku-list li { gap: 12px; font-size: 16px; }
+  .ink-shell.freepaper-shell .guestbook-panel .danmaku-list .small { font-size: 13px; }
+}
+@media (max-width: 350px) {
+  .ink-shell.freepaper-shell .guestbook-panel > .panel-head { padding-right: 110px; }
+  .ink-shell.freepaper-shell .guestbook-panel .panel-head h3 { font-size: 23px; }
+  .ink-shell.freepaper-shell .guestbook-panel .danmaku-controls { right: -6px; font-size: 13px; }
+  .ink-shell.freepaper-shell .guestbook-panel .danmaku-controls button { padding: 6px; }
+}
+@media (prefers-reduced-motion: reduce) { .ink-shell.freepaper-shell .guestbook-panel .danmaku-list li { animation: none; } }
+

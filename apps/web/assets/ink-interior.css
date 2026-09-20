@@ -1,0 +1,304 @@
+/* The approved xuan-paper visual system continues beyond the homepage. */
+.ink-shell:not(.freepaper-shell) {
+  max-width: 1296px;
+  width: calc(100% - clamp(48px, 15.625vw, 240px));
+  --editorial-space: clamp(56px, 6vw, 88px);
+  color: var(--ink);
+  font-family: var(--serif);
+}
+.ink-shell:not(.freepaper-shell) :is(h1, h2, h3, h4) { color: var(--ink); font-weight: 400; }
+.ink-shell:not(.freepaper-shell) .dot { display: none; }
+.ink-shell:not(.freepaper-shell) .page-heading {
+  position: relative;
+  isolation: isolate;
+  padding: var(--editorial-space) 0 44px;
+  margin-bottom: 48px;
+  border: 0;
+}
+.ink-shell:not(.freepaper-shell) .page-heading::after {
+  content: none;
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  width: min(52%, 620px);
+  height: 260px;
+  right: -20px;
+  bottom: 0;
+  background: url('/brand/ink-landscape.webp') center / contain no-repeat;
+  opacity: .2;
+  mix-blend-mode: multiply;
+  mask-image: linear-gradient(90deg, transparent, #000 30%, #000 90%, transparent);
+}
+.ink-shell:not(.freepaper-shell) .page-heading h1,
+.ink-shell:not(.freepaper-shell) .article-head h1 {
+  font-size: clamp(36px, 4.05vw, 58px);
+  line-height: 1.45;
+  letter-spacing: .035em;
+  text-wrap: balance;
+}
+.ink-shell:not(.freepaper-shell) .page-heading > p {
+  max-width: 42rem;
+  margin: 20px 0 0;
+  font-size: clamp(19px, 1.7vw, 24px);
+  line-height: 1.95;
+  color: var(--ink);
+}
+.ink-shell:not(.freepaper-shell) .subheading,
+.ink-shell:not(.freepaper-shell) .section-heading h2 { font-size: 32px; line-height: 1.55; }
+.ink-shell:not(.freepaper-shell) .text-link,
+.ink-shell:not(.freepaper-shell) .social-links a,
+.ink-shell:not(.freepaper-shell) .crumb {
+  color: var(--green);
+  text-decoration: none;
+  gap: 10px;
+  font-size: 17px;
+}
+.ink-shell:not(.freepaper-shell) :is(.text-link, .social-links a, .crumb):hover { color: var(--ink); text-decoration: none; }
+.ink-shell:not(.freepaper-shell) .button,
+.ink-shell:not(.freepaper-shell) form > .primary { border-radius: 2px; padding: 13px 28px; font-size: 17px; }
+.ink-shell:not(.freepaper-shell) .primary { background: var(--green); border-color: var(--green); color: var(--paper); }
+.ink-shell:not(.freepaper-shell) .primary:hover:not(:disabled) { background: var(--green); filter: brightness(1.1); }
+.ink-shell:not(.freepaper-shell) :is(.page-heading, .article-meta, .creation-card, .related, .comment-list li, .fitness-ending, .attachment, .disclosure) { border: 0; }
+
+/* About: the existing portrait is an accent, never the background of the reading area. */
+.ink-shell:not(.freepaper-shell) .about-layout { grid-template-columns: minmax(0, 720px) minmax(220px, 340px); gap: clamp(48px, 7vw, 108px); }
+.ink-shell:not(.freepaper-shell) .about-layout > .prose { max-width: 42rem; font-size: 19px; line-height: 2; }
+.ink-shell:not(.freepaper-shell) .about-portrait {
+  width: 100%;
+  height: auto;
+  max-width: 340px;
+  justify-self: end;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+  mask-image: radial-gradient(ellipse 62% 60% at 50% 48%, #000 52%, transparent 95%);
+}
+.ink-shell:not(.freepaper-shell) .about-layout .actions { margin-top: 40px; gap: 30px; }
+.ink-shell:not(.freepaper-shell) .social-links { margin-top: 48px; gap: 12px 30px; }
+.ink-shell:not(.freepaper-shell) .social-links h2 { font-size: 28px; }
+
+/* Filters keep one small cinnabar state marker; structural lines give way to space. */
+.ink-shell:not(.freepaper-shell) .list-input { max-width: 1040px; grid-template-columns: minmax(0, 2fr) minmax(200px, 1fr); gap: 48px; }
+.ink-shell:not(.freepaper-shell) .search-field { gap: 16px; }
+.ink-shell:not(.freepaper-shell) .search-field button { border: 0; padding-inline: 8px; color: var(--green); font-size: 17px; }
+.ink-shell:not(.freepaper-shell) .filters { gap: 8px 30px; margin: 20px 0 24px; }
+.ink-shell:not(.freepaper-shell) .filters button {
+  min-height: 44px;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 8px 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--green);
+  font-size: 17px;
+}
+.ink-shell:not(.freepaper-shell) .filters button[aria-pressed='true'] { border-bottom-color: var(--red); background: transparent; color: var(--ink); }
+.ink-shell:not(.freepaper-shell) .filters button:hover { background: transparent; color: var(--ink); }
+.ink-shell:not(.freepaper-shell) .filters + .small { font-size: 13px; margin: 0 0 30px; }
+.ink-shell:not(.freepaper-shell) .creation-list { display: grid; gap: 64px; margin-top: 24px; }
+.ink-shell:not(.freepaper-shell) .creation-list .creation-card { max-width: 1120px; padding: 0; }
+.ink-shell:not(.freepaper-shell) .creation-list .creation-card:has(> a > .creation-cover) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  column-gap: 56px;
+  row-gap: 12px;
+  align-items: start;
+}
+.ink-shell:not(.freepaper-shell) .creation-list .creation-card > a:has(> .creation-cover) { grid-column: 1; grid-row: 1 / 6; }
+.ink-shell:not(.freepaper-shell) .creation-list .creation-card > :is(p, h3, .text-link) { margin: 12px 0; }
+.ink-shell:not(.freepaper-shell) .creation-list .creation-card:has(> a > .creation-cover) > :is(p, h3, .text-link) { grid-column: 2; margin: 0; }
+.ink-shell:not(.freepaper-shell) .creation-list .creation-cover { max-height: 440px; max-width: none; margin: 0; object-fit: contain; background: transparent; }
+.ink-shell:not(.freepaper-shell) .creation-list h3 { font-size: 34px; line-height: 1.6; }
+.ink-shell:not(.freepaper-shell) .creation-card h3 a:hover { text-decoration: none; color: var(--green); }
+.ink-shell:not(.freepaper-shell) .creation-card > p:not(.small):not(.formats) { max-width: 42rem; font-size: 18px; line-height: 1.95; }
+.ink-shell:not(.freepaper-shell) .creation-card > .small { font-size: 13px; gap: 12px 24px; }
+.ink-shell:not(.freepaper-shell) .creation-card .formats { font-size: 13px; color: var(--muted); }
+.ink-shell:not(.freepaper-shell) .pagination { gap: 16px; margin-top: 56px; }
+.ink-shell:not(.freepaper-shell) .pagination a { min-width: 36px; border: 0; color: var(--green); }
+.ink-shell:not(.freepaper-shell) .pagination a[aria-current='page'] { border-bottom: 2px solid var(--red); background: transparent; color: var(--ink); }
+
+/* Photography: clean edges and authentic proportions, with captions on open paper. */
+.ink-shell:not(.freepaper-shell) .album-list { gap: 80px 64px; }
+.ink-shell:not(.freepaper-shell) .album-cover { padding: 0; border: 0; background: transparent; margin-bottom: 26px; }
+.ink-shell:not(.freepaper-shell) .album-cover img { background: transparent; object-fit: contain; }
+.ink-shell:not(.freepaper-shell) .album-card h2 { font-size: 34px; line-height: 1.55; }
+.ink-shell:not(.freepaper-shell) .album-card > a:hover { text-decoration: none; }
+.ink-shell:not(.freepaper-shell) .album-card > a:hover h2 { color: var(--green); }
+.ink-shell:not(.freepaper-shell) .album-card > p { color: var(--ink); font-size: 18px; line-height: 1.95; margin: 14px 0 16px; }
+.ink-shell:not(.freepaper-shell) .gallery-frame { gap: 56px 40px; margin-top: 32px; }
+.ink-shell:not(.freepaper-shell) .gallery-frame .photo-button { border: 0; border-radius: 0; background: transparent !important; }
+.ink-shell:not(.freepaper-shell) .gallery-frame img { object-fit: contain; }
+.ink-shell:not(.freepaper-shell) .gallery-frame figcaption { margin-top: 20px; line-height: 1.9; color: var(--ink); font-size: 16px; }
+.ink-shell:not(.freepaper-shell) .gallery-frame figcaption strong { font-size: 24px; font-weight: 400; }
+.ink-shell:not(.freepaper-shell) .photo-metadata { margin-top: 14px; }
+.ink-shell:not(.freepaper-shell) .photo-metadata summary { color: var(--green); min-height: 40px; }
+.ink-shell:not(.freepaper-shell) .like-button,
+.ink-shell:not(.freepaper-shell) .like-button.liked { border: 0; border-radius: 0; padding: 8px 0; color: var(--green); font-size: 14px; }
+.ink-shell:not(.freepaper-shell) .like-button:hover:not(:disabled) { background: transparent; color: var(--ink); }
+
+/* Detail pages keep their existing reading measure, tables of contents and media controls. */
+.ink-shell:not(.freepaper-shell) .crumb { margin: 40px 0 32px; font-size: 15px; }
+.ink-shell:not(.freepaper-shell) .article-head { max-width: 1000px; margin-bottom: 56px; }
+.ink-shell:not(.freepaper-shell) .article-head h1 { max-width: 20em; }
+.ink-shell:not(.freepaper-shell) .article-head .summary { max-width: 42rem; font-size: 22px; line-height: 1.95; color: var(--ink); }
+.ink-shell:not(.freepaper-shell) .article-meta { padding: 16px 0 0; gap: 8px 24px; font-size: 13px; }
+.ink-shell:not(.freepaper-shell) .prose { color: var(--ink); font-size: 18px; line-height: 2; }
+.ink-shell:not(.freepaper-shell) .prose :is(h2, h3, h4) { line-height: 1.6; }
+.ink-shell:not(.freepaper-shell) .prose a:not(.button):not(.text-link) { color: var(--green); text-decoration-color: var(--red); text-decoration-thickness: 1px; text-underline-offset: 5px; }
+.ink-shell:not(.freepaper-shell) .prose .creation-card h3 a:not(.button):not(.text-link) { color: var(--ink); text-decoration: none; }
+.ink-shell:not(.freepaper-shell) .prose .creation-card h3 a:not(.button):not(.text-link):hover { color: var(--green); }
+.ink-shell:not(.freepaper-shell) .quote { border: 0; padding-left: 28px; color: var(--ink); font-size: clamp(23px, 2.1vw, 29px); }
+.ink-shell:not(.freepaper-shell) .toc { border: 0; }
+.ink-shell:not(.freepaper-shell) .toc a { color: var(--green); }
+.ink-shell:not(.freepaper-shell) .toc a:hover { text-decoration-color: var(--red); }
+.ink-shell:not(.freepaper-shell) .disclosure { background: transparent; padding-block: 12px; }
+.ink-shell:not(.freepaper-shell) .disclosure summary { color: var(--green); }
+.ink-shell:not(.freepaper-shell) .audio-block { border: 0; background: color-mix(in srgb, var(--paper) 70%, transparent); padding: 24px 0; }
+.ink-shell:not(.freepaper-shell) .audio-block h3 { color: var(--ink); }
+.ink-shell:not(.freepaper-shell) .code-block { border: 0; }
+.ink-shell:not(.freepaper-shell) :is(.code-label, pre) { background: color-mix(in srgb, var(--paper) 80%, transparent); }
+.ink-shell:not(.freepaper-shell) .code-label { border-bottom: 0; }
+.ink-shell:not(.freepaper-shell) .code-label button { border: 0; color: var(--green); }
+.ink-shell:not(.freepaper-shell) .attachment { padding-block: 20px; }
+.ink-shell:not(.freepaper-shell) .related { padding-top: 32px; }
+.ink-shell:not(.freepaper-shell) .related .creation-card { padding-block: 28px; }
+
+/* Training records remain date-driven; the number is typography, not a dashboard tile. */
+.ink-shell:not(.freepaper-shell) .fitness-hero .fitness-count { margin-top: 36px; }
+.ink-shell:not(.freepaper-shell) .day-number { font-size: 22px; }
+.ink-shell:not(.freepaper-shell) .day-number strong { font-family: Georgia, var(--serif); font-size: 62px; font-weight: 400; color: var(--ink); }
+.ink-shell:not(.freepaper-shell) .fitness-count .small { font-size: 13px; }
+.ink-shell:not(.freepaper-shell) .fitness-section .section-heading { margin-bottom: 40px; }
+.ink-shell:not(.freepaper-shell) .fitness-section .filters { margin: 0; }
+.ink-shell:not(.freepaper-shell) .fitness-section .fitness-entry { margin-bottom: 88px; }
+.ink-shell:not(.freepaper-shell) .fitness-section .fitness-entry.without-photos { border: 0; padding-block: 12px; }
+.ink-shell:not(.freepaper-shell) .fitness-section .gallery-frame { margin-top: 0; }
+.ink-shell:not(.freepaper-shell) .fitness-note h3 { font-size: 31px; }
+.ink-shell:not(.freepaper-shell) .fitness-note p { color: var(--ink); font-size: 18px; line-height: 1.95; }
+.ink-shell:not(.freepaper-shell) .fitness-note p.small,
+.ink-shell:not(.freepaper-shell) .fitness-note .photo-pending { color: var(--muted); font-size: 13px; }
+.ink-shell:not(.freepaper-shell) .fitness-ending { margin-top: 56px; padding-top: 20px; font-size: 32px; line-height: 1.7; }
+
+/* Correspondence and public comments share a calm, readable writing surface. */
+.ink-shell:not(.freepaper-shell) .guestbook-layout { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 100px; }
+.ink-shell:not(.freepaper-shell) .comment-list { margin-bottom: 36px; }
+.ink-shell:not(.freepaper-shell) .comment-list li { padding: 0 0 30px; margin-bottom: 12px; }
+.ink-shell:not(.freepaper-shell) .comment-list p { font-size: 18px; line-height: 1.95; color: var(--ink); }
+.ink-shell:not(.freepaper-shell) .comment-list .small { font-size: 13px; }
+.ink-shell:not(.freepaper-shell) .comments { margin-top: 88px; }
+.ink-shell:not(.freepaper-shell) .comments > h2 { font-size: 32px; margin-bottom: 32px; }
+.ink-shell:not(.freepaper-shell) .contact-section { grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 112px; padding-top: 0; }
+.ink-shell:not(.freepaper-shell) .contact-copy { padding-top: 0; }
+.ink-shell:not(.freepaper-shell) .contact-copy h2 { font-size: 34px; }
+.ink-shell:not(.freepaper-shell) .contact-copy > p { color: var(--ink); font-size: 18px; line-height: 1.95; }
+.ink-shell:not(.freepaper-shell) .field { gap: 10px; margin-bottom: 30px; font-size: 17px; color: var(--ink); }
+.ink-shell:not(.freepaper-shell) .field :is(input, textarea, select) {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--ink) 24%, transparent);
+  border-radius: 0;
+  padding: 12px 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: 17px;
+  line-height: 1.8;
+}
+.ink-shell:not(.freepaper-shell) .field :is(input, textarea, select):hover { border-bottom-color: var(--green); }
+.ink-shell:not(.freepaper-shell) .field :is(input, textarea, select):focus { border-bottom-color: var(--red); }
+.ink-shell:not(.freepaper-shell) .field :is(input, textarea)::placeholder { color: var(--muted); opacity: .85; }
+.ink-shell:not(.freepaper-shell) .field textarea { min-height: 160px; resize: vertical; }
+.ink-shell:not(.freepaper-shell) .field .small { font-size: 12px; }
+.ink-shell:not(.freepaper-shell) .form-bottom { font-size: 12px; gap: 8px 20px; flex-wrap: wrap; }
+.ink-shell:not(.freepaper-shell) .empty-state { padding: 24px 0 48px; border: 0; background: transparent; }
+.ink-shell:not(.freepaper-shell) .empty-state h2 { font-size: 29px; }
+.ink-shell:not(.freepaper-shell) .empty-state > p { font-size: 18px; line-height: 1.95; }
+.ink-shell:not(.freepaper-shell) .error-page { padding-block: 56px; }
+.ink-shell:not(.freepaper-shell) .site-footer { margin-top: 104px; border: 0; }
+
+@media (max-width: 1100px) {
+  .ink-shell:not(.freepaper-shell) { width: calc(100% - 80px); }
+  .ink-shell:not(.freepaper-shell) .about-layout { grid-template-columns: minmax(0, 1fr) 280px; gap: 48px; }
+  .ink-shell:not(.freepaper-shell) .creation-list .creation-card:has(> a > .creation-cover) { column-gap: 36px; }
+  .ink-shell:not(.freepaper-shell) .album-list { gap: 64px 40px; }
+  .ink-shell:not(.freepaper-shell) :is(.contact-section, .guestbook-layout) { gap: 56px; }
+}
+@media (max-width: 850px) {
+  .ink-shell:not(.freepaper-shell) { width: calc(100% - 48px); }
+  .ink-shell:not(.freepaper-shell) .page-heading { margin-bottom: 36px; padding-bottom: 28px; }
+  .ink-shell:not(.freepaper-shell) .page-heading::after { width: 55%; height: 190px; opacity: .14; }
+  .ink-shell:not(.freepaper-shell) .about-layout { gap: 32px; grid-template-columns: minmax(0, 1fr) 220px; }
+  .ink-shell:not(.freepaper-shell) .list-input { gap: 28px; }
+  .ink-shell:not(.freepaper-shell) .creation-list h3 { font-size: 29px; }
+  .ink-shell:not(.freepaper-shell) .gallery-frame { gap: 40px 28px; }
+  .ink-shell:not(.freepaper-shell) :is(.contact-section, .guestbook-layout) { gap: 36px; }
+}
+@media (max-width: 760px) {
+  .ink-shell:not(.freepaper-shell) { width: calc(100% - 40px); --editorial-space: 44px; }
+  .ink-shell:not(.freepaper-shell) .page-heading { margin-bottom: 32px; padding-bottom: 24px; }
+  .ink-shell:not(.freepaper-shell) .page-heading::after { right: -12px; width: 65%; height: 160px; opacity: .11; }
+  .ink-shell:not(.freepaper-shell) .page-heading h1,
+  .ink-shell:not(.freepaper-shell) .article-head h1 { font-size: 36px; line-height: 1.5; letter-spacing: .015em; }
+  .ink-shell:not(.freepaper-shell) .page-heading > p { font-size: 19px; margin-top: 16px; }
+  .ink-shell:not(.freepaper-shell) .subheading,
+  .ink-shell:not(.freepaper-shell) .section-heading h2 { font-size: 28px; }
+  .ink-shell:not(.freepaper-shell) :is(.text-link, .social-links a, .crumb) { font-size: 16px; }
+  .ink-shell:not(.freepaper-shell) .button,
+  .ink-shell:not(.freepaper-shell) form > .primary { padding: 12px 22px; font-size: 16px; }
+  .ink-shell:not(.freepaper-shell) .about-layout { display: flex; gap: 30px; flex-direction: column-reverse; }
+  .ink-shell:not(.freepaper-shell) .about-portrait { width: 220px; align-self: center; }
+  .ink-shell:not(.freepaper-shell) .about-layout > .prose { font-size: 18px; }
+  .ink-shell:not(.freepaper-shell) .about-layout .actions { gap: 24px; margin-top: 28px; }
+  .ink-shell:not(.freepaper-shell) .social-links { margin-top: 36px; }
+  .ink-shell:not(.freepaper-shell) .list-input { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .ink-shell:not(.freepaper-shell) .filters { gap: 8px 24px; margin-block: 8px 20px; }
+  .ink-shell:not(.freepaper-shell) .filters button { font-size: 16px; }
+  .ink-shell:not(.freepaper-shell) .creation-list { gap: 48px; }
+  .ink-shell:not(.freepaper-shell) .creation-list .creation-card:has(> a > .creation-cover) { display: block; }
+  .ink-shell:not(.freepaper-shell) .creation-list .creation-cover { margin-bottom: 24px; max-height: 65svh; }
+  .ink-shell:not(.freepaper-shell) .creation-list .creation-card > :is(p, h3, .text-link),
+  .ink-shell:not(.freepaper-shell) .creation-list .creation-card:has(> a > .creation-cover) > :is(p, h3, .text-link) { margin: 12px 0; }
+  .ink-shell:not(.freepaper-shell) .creation-list h3 { font-size: 29px; }
+  .ink-shell:not(.freepaper-shell) .creation-card > p:not(.small):not(.formats) { font-size: 17px; }
+  .ink-shell:not(.freepaper-shell) .album-list { gap: 56px; }
+  .ink-shell:not(.freepaper-shell) .album-cover { aspect-ratio: var(--album-cover-ratio, 3 / 2); margin-bottom: 22px; padding: 0; }
+  .ink-shell:not(.freepaper-shell) .album-card h2 { font-size: 30px; }
+  .ink-shell:not(.freepaper-shell) .album-card > p { font-size: 17px; }
+  .ink-shell:not(.freepaper-shell) .gallery-frame { gap: 40px 24px; margin-top: 24px; }
+  .ink-shell:not(.freepaper-shell) .gallery-frame figcaption { margin-top: 16px; font-size: 15px; }
+  .ink-shell:not(.freepaper-shell) .gallery-frame figcaption strong { font-size: 22px; }
+  .ink-shell:not(.freepaper-shell) .crumb { margin-block: 24px 22px; }
+  .ink-shell:not(.freepaper-shell) .article-head { margin-bottom: 36px; }
+  .ink-shell:not(.freepaper-shell) .article-head .summary { font-size: 19px; }
+  .ink-shell:not(.freepaper-shell) .article-meta { font-size: 12px; gap: 8px 18px; }
+  .ink-shell:not(.freepaper-shell) .prose { font-size: 17px; line-height: 1.95; }
+  .ink-shell:not(.freepaper-shell) .quote { padding-left: 16px; font-size: 23px; }
+  .ink-shell:not(.freepaper-shell) .fitness-hero .fitness-count { margin-top: 28px; }
+  .ink-shell:not(.freepaper-shell) .day-number { font-size: 19px; }
+  .ink-shell:not(.freepaper-shell) .day-number strong { font-size: 54px; }
+  .ink-shell:not(.freepaper-shell) .fitness-section .section-heading { margin-bottom: 28px; }
+  .ink-shell:not(.freepaper-shell) .fitness-section .fitness-entry { margin-bottom: 56px; }
+  .ink-shell:not(.freepaper-shell) .fitness-note h3 { font-size: 28px; }
+  .ink-shell:not(.freepaper-shell) .fitness-note p { font-size: 17px; }
+  .ink-shell:not(.freepaper-shell) .fitness-ending { font-size: 27px; padding-top: 0; }
+  .ink-shell:not(.freepaper-shell) :is(.contact-section, .guestbook-layout) { grid-template-columns: minmax(0, 1fr); gap: 48px; }
+  .ink-shell:not(.freepaper-shell) .contact-copy h2 { font-size: 30px; }
+  .ink-shell:not(.freepaper-shell) .contact-copy > p { font-size: 17px; }
+  .ink-shell:not(.freepaper-shell) .comments { margin-top: 56px; }
+  .ink-shell:not(.freepaper-shell) .comments > h2 { font-size: 28px; margin-bottom: 28px; }
+  .ink-shell:not(.freepaper-shell) .comment-list li { padding-bottom: 24px; }
+  .ink-shell:not(.freepaper-shell) .comment-list p { font-size: 17px; }
+  .ink-shell:not(.freepaper-shell) .field { margin-bottom: 26px; font-size: 16px; }
+  .ink-shell:not(.freepaper-shell) .field :is(input, textarea, select) { font-size: 16px; }
+  .ink-shell:not(.freepaper-shell) .empty-state > p { font-size: 17px; }
+  .ink-shell:not(.freepaper-shell) .site-footer { margin-top: 68px; }
+}
+@media (max-width: 380px) {
+  .ink-shell:not(.freepaper-shell) .page-heading h1,
+  .ink-shell:not(.freepaper-shell) .article-head h1 { font-size: 32px; }
+  .ink-shell:not(.freepaper-shell) .page-heading > p { font-size: 18px; }
+  .ink-shell:not(.freepaper-shell) .filters { gap: 8px 22px; }
+  .ink-shell:not(.freepaper-shell) .creation-list h3 { font-size: 27px; }
+  .ink-shell:not(.freepaper-shell) .about-layout .actions { gap: 16px; }
+}
