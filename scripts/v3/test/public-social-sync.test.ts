@@ -81,4 +81,36 @@ describe('dependency-free public social runner', () => {
       expect(urls[1]).toBe('https://xvyin.com/api/v1/internal/social-sync/claim');
     } finally { logger.mockRestore(); }
   });
+  it('logs only a fixed failure stage and HTTP status without tokens, request URLs or response bodies', async () => {
+    const requestSecret = 'request-token-must-never-appear-in-logs';
+    const payloadSecret = 'oidc-payload-value-must-never-appear-in-logs';
+    const token = [
+      Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url'),
+      Buffer.from(JSON.stringify({ aud: 'https://xvyin.com/public-social-sync', privateDiagnostic: payloadSecret })).toString('base64url'),
+      'synthetic-signature-must-not-be-logged',
+    ].join('.');
+    const responseBody = `private-response-body-must-never-appear-in-logs ${requestSecret} ${token}`;
+    const requestedUrls: string[] = [];
+    const loggers = (['log', 'info', 'warn', 'error', 'debug'] as const).map(method => vi.spyOn(console, method).mockImplementation(() => {}));
+    try {
+      await expect(syncPublicData({ ...environment, ACTIONS_ID_TOKEN_REQUEST_TOKEN: requestSecret }, async (url, options) => {
+        requestedUrls.push(String(url));
+        const authorization = new Headers(options?.headers).get('authorization');
+        if (new URL(String(url)).hostname.endsWith('.actions.githubusercontent.com')) {
+          expect(authorization).toBe(`Bearer ${requestSecret}`);
+          return json({ value: token });
+        }
+        expect(String(url)).toBe('https://xvyin.com/api/v1/internal/social-sync/claim');
+        expect(authorization).toBe(`Bearer ${token}`);
+        return new Response(responseBody, { status: 403 });
+      })).rejects.toThrow('upstream-blocked');
+      expect(requestedUrls).toHaveLength(2);
+      expect(loggers[3]!.mock.calls).toEqual([[JSON.stringify({ stage: 'claim', reason: 'upstream-blocked', status: 403 })]]);
+      const logged = JSON.stringify(loggers.flatMap(logger => logger.mock.calls));
+      for (const forbidden of [requestSecret, token, ...token.split('.'), payloadSecret, responseBody, 'private-response-body-must-never-appear-in-logs', ...requestedUrls]) {
+        expect(logged).not.toContain(forbidden);
+      }
+      expect(logged).not.toMatch(/https?:\/\//u);
+    } finally { for (const logger of loggers) logger.mockRestore(); }
+  });
 });

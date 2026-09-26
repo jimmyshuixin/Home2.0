@@ -17,7 +17,10 @@ export async function verifySocialSyncRunner(request: Request, options: { key?: 
     const subjects = [`repo:${trust.repository}:ref:${trust.ref}`, `repo:${trust.owner}@${trust.ownerId}/Home2.0@${trust.repositoryId}:ref:${trust.ref}`];
     assert(payload.repository === trust.repository && payload.repository_id === trust.repositoryId && payload.repository_owner === trust.owner && payload.repository_owner_id === trust.ownerId && payload.repository_visibility === 'public' && subjects.includes(payload.sub || ''), 'SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步仓库不符');
     assert(payload.aud === trust.audience && payload.ref === trust.ref && payload.ref_type === 'branch' && payload.event_name === 'workflow_dispatch' && payload.runner_environment === 'github-hosted', 'SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步来源不符');
-    assert(payload.workflow_ref === `${trust.repository}/.github/workflows/${trust.workflow}@${trust.ref}` && payload.workflow_sha === payload.sha && payload.job_workflow_ref === undefined, 'SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步工作流不符');
+    // GitHub may include job claims for a direct workflow too. They must be absent together or identify this exact workflow and commit.
+    const directWorkflow = (payload.job_workflow_ref === undefined && payload.job_workflow_sha === undefined)
+      || (payload.job_workflow_ref === payload.workflow_ref && payload.job_workflow_sha === payload.sha);
+    assert(payload.workflow_ref === `${trust.repository}/.github/workflows/${trust.workflow}@${trust.ref}` && payload.workflow_sha === payload.sha && directWorkflow, 'SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步工作流不符');
     assert(typeof payload.run_id === 'string' && /^[1-9]\d{0,24}$/u.test(payload.run_id) && typeof payload.run_attempt === 'string' && /^[1-9]\d{0,8}$/u.test(payload.run_attempt) && typeof payload.sha === 'string' && /^[a-f0-9]{40}$/u.test(payload.sha), 'SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步身份不完整');
     return { runId: `github-${payload.run_id}`, runAttempt: payload.run_attempt, codeSha: payload.sha };
   } catch { throw new ApiError('SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步来源认证失败'); }

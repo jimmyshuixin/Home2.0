@@ -36,4 +36,23 @@ describe('dedicated social workflow OIDC trust', () => {
   it('rejects a token with additional audiences even if the expected audience is included', async () => {
     await expect(verify({ aud: [t.audience, 'https://other.invalid'] })).rejects.toMatchObject({ code: 'SOCIAL_SYNC_UNAUTHORIZED' });
   });
+  it('accepts direct-workflow job claims only when both identify the exact current trusted workflow and commit', async () => {
+    const workflow = `${t.repository}/.github/workflows/${t.workflow}@${t.ref}`;
+    expect(await verify({ job_workflow_ref: workflow, job_workflow_sha: 'a'.repeat(40) })).toEqual({ runId: 'github-123456', runAttempt: '1', codeSha: 'a'.repeat(40) });
+    expect(await verify({ sha: 'b'.repeat(40), workflow_sha: 'b'.repeat(40), job_workflow_ref: workflow, job_workflow_sha: 'b'.repeat(40) })).toMatchObject({ codeSha: 'b'.repeat(40) });
+  });
+  it.each([
+    { job_workflow_ref: `${t.repository}/.github/workflows/reused.yml@${t.ref}`, job_workflow_sha: 'a'.repeat(40) },
+    { job_workflow_ref: `${t.repository}/.github/workflows/${t.workflow}@refs/heads/other`, job_workflow_sha: 'a'.repeat(40) },
+    { job_workflow_ref: `${t.repository}/.github/workflows/${t.workflow}@${t.ref}`, job_workflow_sha: 'b'.repeat(40) },
+    { job_workflow_ref: `${t.repository}/.github/workflows/${t.workflow}@${t.ref}` },
+    { job_workflow_sha: 'a'.repeat(40) },
+    { job_workflow_ref: '', job_workflow_sha: 'a'.repeat(40) },
+    { job_workflow_ref: `${t.repository}/.github/workflows/${t.workflow}@${t.ref}`, job_workflow_sha: '' },
+    { job_workflow_ref: null, job_workflow_sha: null },
+    { job_workflow_ref: null }, { job_workflow_sha: null },
+    { job_workflow_ref: '', job_workflow_sha: '' },
+  ])('rejects different, incomplete or empty direct-workflow job claims (%j)', async claims => {
+    await expect(verify(claims)).rejects.toMatchObject({ code: 'SOCIAL_SYNC_UNAUTHORIZED' });
+  });
 });
