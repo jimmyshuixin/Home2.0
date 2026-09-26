@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { generateKeyPair, SignJWT, type JWTPayload } from 'jose';
+import { generateKeyPair, SignJWT, type JWTPayload, type JWTVerifyGetKey } from 'jose';
 import { verifySocialSyncRunner, SOCIAL_SYNC_TRUST } from '../src/social-sync-auth';
 
 const now = Date.UTC(2026, 8, 26, 15), second = now / 1000, t = SOCIAL_SYNC_TRUST;
@@ -11,9 +11,9 @@ const base = (): JWTPayload => ({
   ref: t.ref, ref_type: 'branch', event_name: 'workflow_dispatch', runner_environment: 'github-hosted', workflow_ref: `${t.repository}/.github/workflows/${t.workflow}@${t.ref}`,
   workflow_sha: 'a'.repeat(40), sha: 'a'.repeat(40), run_id: '123456', run_attempt: '1',
 });
-async function verify(change: JWTPayload = {}) {
+async function verify(change: JWTPayload = {}, key?: JWTVerifyGetKey) {
   const token = await new SignJWT({ ...base(), ...change }).setProtectedHeader({ alg: 'RS256' }).sign(keys.privateKey);
-  return verifySocialSyncRunner(new Request('https://xvyin.com/api/v1/internal/social-sync/claim', { headers: { authorization: `Bearer ${token}` } }), { key: async () => keys.publicKey, now });
+  return verifySocialSyncRunner(new Request('https://xvyin.com/api/v1/internal/social-sync/claim', { headers: { authorization: `Bearer ${token}` } }), { key: key || (async () => keys.publicKey), now });
 }
 describe('dedicated social workflow OIDC trust', () => {
   it('accepts both standard subject formats for dispatched default-branch runs without pinning future commits', async () => {
@@ -54,5 +54,33 @@ describe('dedicated social workflow OIDC trust', () => {
     { job_workflow_ref: '', job_workflow_sha: '' },
   ])('rejects different, incomplete or empty direct-workflow job claims (%j)', async claims => {
     await expect(verify(claims)).rejects.toMatchObject({ code: 'SOCIAL_SYNC_UNAUTHORIZED' });
+  });
+  it.each([
+    [{ repository_id: 'wrong' }, 'repository'], [{ event_name: 'push' }, 'source'],
+    [{ job_workflow_sha: 'a'.repeat(40) }, 'workflow'], [{ run_attempt: '0' }, 'identity'],
+  ] as const)('only exposes a fixed stage for a signed identity mismatch (%s)', async (claims, stage) => {
+    await expect(verify(claims)).rejects.toMatchObject({ status: 403, fields: { stage: [stage], reason: ['mismatch'] } });
+  });
+  it.each([
+    ['ERR_JWS_SIGNATURE_VERIFICATION_FAILED', 'signature'], ['ERR_JWT_CLAIM_VALIDATION_FAILED', 'claim'], ['ERR_JWT_EXPIRED', 'claim'],
+    ['ERR_JOSE_GENERIC', 'jwks-fetch'], ['ERR_JWKS_TIMEOUT', 'timeout'], ['ERR_JWKS_NO_MATCHING_KEY', 'no-key'],
+    ['ERR_JWK_INVALID', 'invalid-key'], ['ERR_JWKS_INVALID', 'invalid-key'], ['ERR_JWKS_MULTIPLE_MATCHING_KEYS', 'invalid-key'],
+    ['ERR_JOSE_ALG_NOT_ALLOWED', 'unsupported'], ['ERR_JOSE_NOT_SUPPORTED', 'unsupported'], ['ERR_JWS_INVALID', 'invalid-token'], ['ERR_JWT_INVALID', 'invalid-token'],
+    ['arbitrary-secret-code', 'unknown'], ['__proto__', 'unknown'],
+  ])('maps only allowlisted signature error codes (%s) without leaking error details', async (code, reason) => {
+    const secret = 'private-token-and-payload-fixture';
+    const error = await verify({}, async () => { throw Object.assign(new Error(secret), { code, payload: { private: secret }, cause: secret }); }).catch((value: unknown) => value);
+    expect(error).toMatchObject({ status: 403, message: '公开资料同步来源认证失败', fields: { stage: ['signature'], reason: [reason] } });
+    expect(JSON.stringify(error)).not.toContain(secret); expect(JSON.stringify(error)).not.toContain(code);
+  });
+  it('classifies real JOSE claim failures without exposing the offending value', async () => {
+    await expect(verify({ aud: 'private-value-not-to-return' })).rejects.toMatchObject({ fields: { stage: ['signature'], reason: ['claim'], claim: ['aud'] } });
+    await expect(verify({ exp: second - 1 })).rejects.toMatchObject({ fields: { stage: ['signature'], reason: ['claim'], claim: ['exp'] } });
+  });
+  it('never returns a non-allowlisted claim name or claims attached to an unrelated error', async () => {
+    for (const details of [{ code: 'ERR_JWT_CLAIM_VALIDATION_FAILED', claim: 'private-claim-name' }, { code: 'ERR_JOSE_GENERIC', claim: 'aud' }]) {
+      const error = await verify({}, async () => { throw Object.assign(new Error('private detail'), details); }).catch((value: unknown) => value);
+      expect(error).not.toHaveProperty('fields.claim'); expect(JSON.stringify(error)).not.toContain('private');
+    }
   });
 });

@@ -4,6 +4,7 @@ import { MemoryStore } from '../src/store/memory';
 import { ApiError } from '../src/errors';
 import { sanitizeBilibiliProfile } from '../src/bilibili';
 import { sanitizeGitHubProfile } from '../src/github-public';
+import { verifySocialSyncRunner } from '../src/social-sync-auth';
 
 const origin = 'https://test.invalid', now = Date.UTC(2026, 8, 26, 15);
 const identity = { runId: 'github-1234', runAttempt: '1', codeSha: 'a'.repeat(40) };
@@ -32,6 +33,14 @@ describe('anonymous social profiles and dedicated runner routes', () => {
     runtime.verifySocialRunner = vi.fn(async () => { throw new ApiError('SOCIAL_SYNC_UNAUTHORIZED', 403, 'denied'); });
     const res = await createApi(runtime).app.request(`${origin}/api/v1/internal/social-sync`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'malformed upstream body' });
     expect(res.status).toBe(403); expect((await runtime.store.list('social_sync')).items).toEqual([]);
+  });
+  it('serializes only fixed safe auth diagnostics to the runner, without echoing the request', async () => {
+    runtime.verifySocialRunner = request => verifySocialSyncRunner(request);
+    const response = await createApi(runtime).app.request(`${origin}/api/v1/internal/social-sync/claim`, { method: 'POST', headers: { authorization: 'Bearer private-not-a-jwt' } });
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body).toMatchObject({ error: { code: 'SOCIAL_SYNC_UNAUTHORIZED', fields: { stage: ['signature'], reason: ['invalid-token'] } } });
+    expect(JSON.stringify(body)).not.toContain('private-not-a-jwt'); expect((await runtime.store.list('social_sync')).items).toEqual([]);
   });
   it('does not grant publication or media authority to the separate social verifier', async () => {
     runtime.verifySocialRunner = vi.fn(async () => identity);

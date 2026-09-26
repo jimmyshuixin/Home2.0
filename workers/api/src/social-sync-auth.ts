@@ -7,21 +7,47 @@ export const SOCIAL_SYNC_TRUST = {
   ref: 'refs/heads/main', workflow: 'public-social-sync.yml', audience: 'https://xvyin.com/public-social-sync',
 } as const;
 export interface SocialSyncIdentity { runId: string; runAttempt: string; codeSha: string }
+type AuthStage = 'signature' | 'repository' | 'source' | 'workflow' | 'identity';
+type AuthReason = 'invalid-token' | 'signature' | 'claim' | 'jwks-fetch' | 'timeout' | 'no-key' | 'invalid-key' | 'unsupported' | 'unknown' | 'mismatch';
+function signatureReason(error: unknown): AuthReason {
+  // Never return an upstream message, claim value, payload, token or arbitrary error code.
+  const code = error instanceof Error && 'code' in error ? error.code : undefined;
+  switch (code) {
+    case 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED': return 'signature';
+    case 'ERR_JWT_CLAIM_VALIDATION_FAILED': case 'ERR_JWT_EXPIRED': return 'claim';
+    case 'ERR_JOSE_GENERIC': return 'jwks-fetch';
+    case 'ERR_JWKS_TIMEOUT': return 'timeout';
+    case 'ERR_JWKS_NO_MATCHING_KEY': return 'no-key';
+    case 'ERR_JWK_INVALID': case 'ERR_JWKS_INVALID': case 'ERR_JWKS_MULTIPLE_MATCHING_KEYS': return 'invalid-key';
+    case 'ERR_JOSE_ALG_NOT_ALLOWED': case 'ERR_JOSE_NOT_SUPPORTED': return 'unsupported';
+    case 'ERR_JWS_INVALID': case 'ERR_JWT_INVALID': return 'invalid-token';
+    default: return 'unknown';
+  }
+}
 const jwks = createRemoteJWKSet(new URL('https://token.actions.githubusercontent.com/.well-known/jwks'), { timeoutDuration: 5000 });
 export async function verifySocialSyncRunner(request: Request, options: { key?: JWTVerifyGetKey; now?: number } = {}): Promise<SocialSyncIdentity> {
   const token = request.headers.get('authorization')?.match(/^Bearer ([A-Za-z0-9_.-]+)$/u)?.[1];
-  assert(token && token.length <= 16000, 'SOCIAL_SYNC_UNAUTHORIZED', 401, '公开资料同步来源未获授权');
+  if (!token || token.length > 16000) throw new ApiError('SOCIAL_SYNC_UNAUTHORIZED', 401, '公开资料同步来源未获授权', { stage: ['signature'], reason: ['invalid-token'] });
+  let stage: AuthStage = 'signature';
   try {
     const trust = SOCIAL_SYNC_TRUST;
     const { payload } = await jwtVerify(token, options.key || jwks, { issuer: 'https://token.actions.githubusercontent.com', audience: trust.audience, algorithms: ['RS256'], maxTokenAge: '10m', requiredClaims: ['exp', 'iat', 'nbf', 'sub'], ...(options.now === undefined ? {} : { currentDate: new Date(options.now) }) });
+    stage = 'repository';
     const subjects = [`repo:${trust.repository}:ref:${trust.ref}`, `repo:${trust.owner}@${trust.ownerId}/Home2.0@${trust.repositoryId}:ref:${trust.ref}`];
     assert(payload.repository === trust.repository && payload.repository_id === trust.repositoryId && payload.repository_owner === trust.owner && payload.repository_owner_id === trust.ownerId && payload.repository_visibility === 'public' && subjects.includes(payload.sub || ''), 'SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步仓库不符');
+    stage = 'source';
     assert(payload.aud === trust.audience && payload.ref === trust.ref && payload.ref_type === 'branch' && payload.event_name === 'workflow_dispatch' && payload.runner_environment === 'github-hosted', 'SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步来源不符');
+    stage = 'workflow';
     // GitHub may include job claims for a direct workflow too. They must be absent together or identify this exact workflow and commit.
     const directWorkflow = (payload.job_workflow_ref === undefined && payload.job_workflow_sha === undefined)
       || (payload.job_workflow_ref === payload.workflow_ref && payload.job_workflow_sha === payload.sha);
     assert(payload.workflow_ref === `${trust.repository}/.github/workflows/${trust.workflow}@${trust.ref}` && payload.workflow_sha === payload.sha && directWorkflow, 'SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步工作流不符');
+    stage = 'identity';
     assert(typeof payload.run_id === 'string' && /^[1-9]\d{0,24}$/u.test(payload.run_id) && typeof payload.run_attempt === 'string' && /^[1-9]\d{0,8}$/u.test(payload.run_attempt) && typeof payload.sha === 'string' && /^[a-f0-9]{40}$/u.test(payload.sha), 'SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步身份不完整');
     return { runId: `github-${payload.run_id}`, runAttempt: payload.run_attempt, codeSha: payload.sha };
-  } catch { throw new ApiError('SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步来源认证失败'); }
+  } catch (error) {
+    const fields: Record<string, string[]> = { stage: [stage], reason: [stage === 'signature' ? signatureReason(error) : 'mismatch'] };
+    if (stage === 'signature' && error instanceof Error && 'code' in error && ['ERR_JWT_CLAIM_VALIDATION_FAILED', 'ERR_JWT_EXPIRED'].includes(String(error.code)) && 'claim' in error && typeof error.claim === 'string' && ['iss', 'aud', 'nbf', 'iat', 'exp', 'sub'].includes(error.claim)) fields.claim = [error.claim];
+    throw new ApiError('SOCIAL_SYNC_UNAUTHORIZED', 403, '公开资料同步来源认证失败', fields);
+  }
 }
