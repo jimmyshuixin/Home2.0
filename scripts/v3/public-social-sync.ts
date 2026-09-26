@@ -13,7 +13,8 @@ type Environment = Readonly<Record<string, string | undefined>>;
 class SyncError extends Error {
   readonly reason: Failure;
   readonly status?: number;
-  constructor(reason: Failure, status?: number) { super(reason); this.reason = reason; this.status = status; }
+  readonly diagnostic?: Record<string, string>;
+  constructor(reason: Failure, status?: number, diagnostic?: Record<string, string>) { super(reason); this.reason = reason; this.status = status; this.diagnostic = diagnostic; }
 }
 const record = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const count = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -29,8 +30,19 @@ export async function requestJson(url: string, options: RequestInit = {}, maximu
   try { response = await fetcher(url, { ...options, redirect: 'manual', signal, headers: { accept: 'application/json', 'user-agent': 'xvyin-public-sync/1.0', ...options.headers } }); }
   catch (error) { throw new SyncError(reason(error)); }
   if (response.status !== 200) {
-    await response.body?.cancel();
-    throw new SyncError(response.status === 429 || response.headers.get('x-ratelimit-remaining') === '0' ? 'rate-limited' : [403, 412].includes(response.status) ? 'upstream-blocked' : 'unavailable', response.status);
+    const diagnostic: Record<string, string> = {};
+    if (new URL(url).origin === ORIGIN && response.headers.get('content-type')?.startsWith('application/json')) {
+      try {
+        const parsed = await requestJson(ORIGIN, {}, 4096, async () => new Response(response.body, { status: 200, headers: response.headers }));
+        const failure = record(record(parsed.data)?.error), fields = record(failure?.fields);
+        if (failure?.code === 'SOCIAL_SYNC_UNAUTHORIZED') diagnostic.serverCode = 'SOCIAL_SYNC_UNAUTHORIZED';
+        for (const key of ['stage', 'reason']) {
+          const value = fields?.[key];
+          if (Array.isArray(value) && value.length === 1 && typeof value[0] === 'string' && ['signature', 'repository', 'source', 'workflow', 'identity', 'claim', 'jwks-fetch', 'timeout', 'no-key', 'invalid-token', 'invalid-key', 'unsupported', 'unknown', 'mismatch'].includes(value[0])) diagnostic[key] = value[0];
+        }
+      } catch { /* Never expose an untrusted error body. */ }
+    } else await response.body?.cancel();
+    throw new SyncError(response.status === 429 || response.headers.get('x-ratelimit-remaining') === '0' ? 'rate-limited' : [403, 412].includes(response.status) ? 'upstream-blocked' : 'unavailable', response.status, Object.keys(diagnostic).length ? diagnostic : undefined);
   }
   const length = response.headers.get('content-length');
   if (!response.body || (length !== null && (!/^\d+$/u.test(length) || Number(length) > maximum))) {
@@ -189,7 +201,7 @@ export async function syncPublicData(environment: Environment = process.env, fet
     for (const warning of collected.warnings) console.warn(warning);
     if (collected.warnings.length || Object.values(collected.input).some(result => result.status === 'failed')) process.exitCode = 1;
     } catch (error) {
-    console.error(JSON.stringify({ stage, reason: reason(error), ...(error instanceof SyncError && error.status ? { status: error.status } : {}) }));
+    console.error(JSON.stringify({ stage, reason: reason(error), ...(error instanceof SyncError && error.status ? { status: error.status } : {}), ...(error instanceof SyncError && error.diagnostic ? { diagnostic: error.diagnostic } : {}) }));
     throw error;
   }
 }
