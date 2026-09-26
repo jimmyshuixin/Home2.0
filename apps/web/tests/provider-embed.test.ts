@@ -34,6 +34,14 @@ describe('official video player URL boundaries', () => {
     expect(providerEmbed({ provider: 'youtube', contentId })).toBeUndefined()
   })
 
+  it('keeps a long Douyin video ID as a string and builds only the official autoplay-disabled player', () => {
+    expect(providerEmbed({ provider: 'douyin', contentId: '7661639577056136457' })).toEqual({ provider: 'douyin', label: '抖音', src: 'https://open.douyin.com/player/video?vid=7661639577056136457&autoplay=0' })
+  })
+
+  it.each(['', '123', '07661639577056136457', '7661639577056136457777', '7661639577056136457\n', '7661639577056136457&autoplay=1', '7.661639577056136e18', 'https://www.douyin.com/video/7661639577056136457', '<iframe src=x>'])('does not embed malformed Douyin input %j', contentId => {
+    expect(providerEmbed({ provider: 'douyin', contentId })).toBeUndefined()
+  })
+
   it('keeps unsupported or absent providers on their existing fallback', () => {
     expect(providerEmbed()).toBeUndefined()
     expect(providerEmbed({ provider: 'netease', contentId: '12345678901' })).toBeUndefined()

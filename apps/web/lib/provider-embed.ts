@@ -1,6 +1,6 @@
 import type { ProviderRef } from '@xvyin/contracts'
 
-export interface ProviderEmbed { provider: 'bilibili' | 'youtube'; label: string; src: string }
+export interface ProviderEmbed { provider: 'bilibili' | 'youtube' | 'douyin'; label: string; src: string }
 
 /** Only build official player URLs from identifiers; never accept iframe HTML or a supplied URL. */
 export function providerEmbed(ref?: ProviderRef): ProviderEmbed | undefined {
@@ -14,6 +14,9 @@ export function providerEmbed(ref?: ProviderRef): ProviderEmbed | undefined {
   }
   if (ref.provider === 'youtube' && /^[A-Za-z0-9_-]{11}$/.test(id)) {
     return { provider: 'youtube', label: 'YouTube', src: `https://www.youtube-nocookie.com/embed/${id}?autoplay=0&playsinline=1&rel=0` }
+  }
+  if (ref.provider === 'douyin' && /^[1-9][0-9]{18,19}$/u.test(id)) {
+    return { provider: 'douyin', label: '抖音', src: `https://open.douyin.com/player/video?vid=${id}&autoplay=0` }
   }
   return undefined
 }

@@ -51,6 +51,14 @@ describe('unified mixed-media drafts', () => {
     expect(ContentBlockSchema.safeParse({ ...audio, autoplay: true }).success).toBe(false);
   });
 
+  it('accepts a Douyin video provider reference without accepting iframe HTML or arbitrary player URLs', () => {
+    const external = { id: 'douyin-video', type: 'video', providerRef: { provider: 'douyin', contentId: '7661639577056136457' }, aspectRatio: 1.5 };
+    expect(ContentBlockSchema.safeParse(external).success).toBe(true);
+    expect(ContentBlockSchema.safeParse({ ...external, iframe: '<iframe src="https://evil.invalid"></iframe>' }).success).toBe(false);
+    expect(ContentBlockSchema.safeParse({ ...external, providerRef: { provider: 'douyin', contentId: 'https://open.douyin.com/player/video?vid=7661639577056136457' } }).success).toBe(false);
+    expect(ContentBlockSchema.safeParse({ ...external, assetId: 'local-video' }).success).toBe(false);
+  });
+
   it('enforces the UTF-8 aggregate body limit beyond individual block limits', () => {
     const blocks = Array.from({ length: 8 }, (_, index) => ({ id: `b_${index}`, type: 'code', language: 'txt', code: '中'.repeat(12_000) }));
     expect(CreationDraftSchema.safeParse({ ...draft, blocks }).success).toBe(false);

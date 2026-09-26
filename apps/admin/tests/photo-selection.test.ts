@@ -28,4 +28,9 @@ describe('provider link normalization', () => {
   it('does not turn unsupported hosts, protocols or credentialed URLs into trusted IDs', () => {
     for (const value of ['https://bilibili.com.evil.test/video/BV1xx411c7mD', 'http://www.bilibili.com/video/BV1xx411c7mD', 'https://user@www.bilibili.com/video/BV1xx411c7mD', 'javascript:alert(1)']) expect(providerContentId('bilibili', value)).toBe(value);
   });
+  it('extracts Douyin IDs from exact public video paths without fetching short links', () => {
+    expect(providerContentId('douyin', 'https://www.douyin.com/video/7661639577056136457?previous_page=web_code_link')).toBe('7661639577056136457');
+    expect(providerContentId('douyin', '7661639577056136457')).toBe('7661639577056136457');
+    for (const value of ['https://v.douyin.com/share-token/', 'https://www.douyin.com.evil.invalid/video/7661639577056136457', 'https://user@www.douyin.com/video/7661639577056136457', 'https://www.douyin.com/video/7661639577056136457/extra', 'https://www.douyin.com/user/7661639577056136457', 'https://www.douyin.com/video/123', 'http://www.douyin.com/video/7661639577056136457']) expect(providerContentId('douyin', value)).toBe(value);
+  });
 });

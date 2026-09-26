@@ -1,1 +1,1 @@
-{ "name": "@xvyin/api", "version": "3.0.0", "private": true, "type": "module", "dependencies": { "@xvyin/contracts": "0.1.0", "@noble/hashes": "2.4.0", "hono": "4.13.7", "jose": "6.2.12", "zod": "4.6.2" } }
+{ "name": "@xvyin/api", "version": "3.0.0", "private": true, "type": "module", "dependencies": { "@xvyin/contracts": "0.1.0", "hono": "4.13.7", "jose": "6.2.12", "zod": "4.6.2" } }

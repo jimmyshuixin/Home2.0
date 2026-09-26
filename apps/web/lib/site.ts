@@ -29,5 +29,5 @@ export function displayTime(seconds: number): string { if (!Number.isFinite(seco
 export function providerLink(ref?: ProviderRef): string | undefined {
   if (!ref) return undefined
   const id = encodeURIComponent(ref.contentId)
-  return ({ bilibili: `https://www.bilibili.com/video/${id}`, youtube: `https://www.youtube.com/watch?v=${id}`, tencent: `https://y.qq.com/n/ryqq/songDetail/${id}`, netease: `https://music.163.com/#/song?id=${id}` })[ref.provider]
+  return ({ bilibili: `https://www.bilibili.com/video/${id}`, youtube: `https://www.youtube.com/watch?v=${id}`, douyin: `https://www.douyin.com/video/${id}`, tencent: `https://y.qq.com/n/ryqq/songDetail/${id}`, netease: `https://music.163.com/#/song?id=${id}` })[ref.provider]
 }

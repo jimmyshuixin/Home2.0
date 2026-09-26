@@ -1,0 +1,37 @@
+name: Public social data synchronization
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+concurrency:
+  group: public-social-data
+  cancel-in-progress: false
+
+jobs:
+  synchronize:
+    if: github.repository == 'jimmyshuixin/Home2.0' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out exact trusted workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout: scripts/v3/public-social-sync.ts
+          sparse-checkout-cone-mode: false
+      - name: Use the supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.2'
+          package-manager-cache: false
+      - name: Import anonymously captured public data
+        run: node --experimental-strip-types scripts/v3/public-social-sync.ts
+      # The existing Cloudflare Worker dispatches this hourly at minute 17.
+      # No native schedule: public-repository inactivity must not disable synchronization.
+      # No npm install, platform account credentials, repository writes or website builds.

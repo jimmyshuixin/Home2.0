@@ -57,11 +57,3 @@ export const BilibiliProfileSchema = z.object({
   }
 });
 export type BilibiliProfile = z.infer<typeof BilibiliProfileSchema>;
-
-export interface BilibiliBindingStatus {
-  configured: boolean; uid: typeof BILIBILI_UID; state: 'unbound' | 'bound' | 'expired';
-  linkedAt: string | null; credentialsExpireAt: string | null; lastSyncAt: string | null; lastAttemptAt: string | null;
-  lastError: string | null; profile: BilibiliProfile | null; works: BilibiliWork[]; worksUpdatedAt: string | null;
-}
-export interface BilibiliQrStart { transactionId: string; qrUrl: string; expiresAt: string; pollAfterMs: number }
-export interface BilibiliQrPoll { state: 'waiting' | 'scanned' | 'bound' | 'expired' | 'rejected'; binding?: BilibiliBindingStatus }

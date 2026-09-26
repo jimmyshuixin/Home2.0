@@ -8,6 +8,7 @@ export function providerContentId(provider: string, input: string): string {
     const host = url.hostname.toLowerCase(), segments = url.pathname.split('/').filter(Boolean);
     let id: string | null | undefined;
     if (provider === 'bilibili' && ['bilibili.com', 'www.bilibili.com', 'm.bilibili.com'].includes(host) && segments[0] === 'video') id = segments[1];
+    if (provider === 'douyin' && ['douyin.com', 'www.douyin.com'].includes(host) && segments.length === 2 && segments[0] === 'video' && /^[1-9][0-9]{18,19}$/u.test(segments[1] || '')) id = segments[1];
     if (provider === 'youtube') {
       if (host === 'youtu.be') id = segments[0];
       if (['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(host)) id = ['shorts', 'embed'].includes(segments[0] || '') ? segments[1] : url.searchParams.get('v');

@@ -1,0 +1,84 @@
+import { describe, expect, it, vi } from 'vitest';
+import { BilibiliProfileSchema, GitHubProfileSchema, SocialSyncInputSchema } from '@xvyin/contracts';
+import { bilibiliProfile, githubProfile, githubRepositories, collectSources, oidcToken, requestJson, syncPublicData } from '../public-social-sync';
+
+const now = Date.parse('2026-09-26T15:00:00.000Z');
+const bili = { code: 0, data: { card: { mid: '520237303', name: '测试 UP', sign: '公开简介', face: 'https://i1.hdslb.com/bfs/face/avatar.webp', password: 'must-not-copy' }, follower: 2545, archive_count: 451, like_num: 46378 } };
+const gh = { id: 121843277, login: 'jimmyshuixin', type: 'User', html_url: 'https://github.com/jimmyshuixin', name: 'xvyin', bio: 'public', avatar_url: 'https://avatars.githubusercontent.com/u/121843277?v=4', public_repos: 8, followers: 2, following: 1, private_gists: 7 };
+const repo = (name: string, more: Record<string, unknown> = {}) => ({ name, owner: { id: 121843277, login: 'jimmyshuixin' }, private: false, fork: false, visibility: 'public', html_url: `https://github.com/jimmyshuixin/${name}`, stargazers_count: 3, forks_count: 1, pushed_at: '2026-09-25T10:00:00Z', ...more });
+const json = (body: unknown, headers?: HeadersInit) => Response.json(body, { headers });
+const environment = { GITHUB_REPOSITORY: 'jimmyshuixin/Home2.0', GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'workflow_dispatch', ACTIONS_ID_TOKEN_REQUEST_URL: 'https://run-actions-1.actions.githubusercontent.com/token?existing=1', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'runner-only-secret' };
+
+describe('dependency-free public social runner', () => {
+  it('projects only approved Bilibili fields and rejects identity substitution', () => {
+    const result = bilibiliProfile(bili, now);
+    expect(BilibiliProfileSchema.parse(result)).toEqual(result);
+    expect(JSON.stringify(result)).not.toContain('must-not-copy');
+    expect(result.followers).toBe(2545);
+    expect(() => bilibiliProfile({ ...bili, data: { ...bili.data, card: { ...bili.data.card, mid: '123' } } }, now)).toThrow('invalid-response');
+    expect(bilibiliProfile({ ...bili, data: { ...bili.data, like_num: -1, card: { ...bili.data.card, face: 'https://evil.test/avatar.webp', name: '<script>x</script>\u0000 UP' } } }, now)).toMatchObject({ name: 'x  UP', likes: null, avatarUrl: null });
+  });
+  it('does not copy private account fields and selects only verified own public non-forks', () => {
+    const profile = githubProfile(gh, now);
+    expect(GitHubProfileSchema.parse(profile)).toEqual(profile);
+    expect(JSON.stringify(profile)).not.toContain('private_gists');
+    expect(() => githubProfile({ ...gh, id: 1 }, now)).toThrow('invalid-response');
+    const selected = githubRepositories([repo('good'), repo('private', { private: true }), repo('fork', { fork: true }), repo('foreign', { owner: { id: 1, login: 'other' } }), repo('internal', { visibility: 'private' })], now);
+    expect(selected.map(value => value.name)).toEqual(['good']);
+    expect(() => githubRepositories([repo('redirect', { html_url: 'https://evil.test/' })], now)).toThrow('invalid-response');
+    expect(() => githubRepositories([repo('bad-count', { stargazers_count: -1 })], now)).toThrow('invalid-response');
+  });
+  it('rejects redirects and caps undeclared streamed responses', async () => {
+    const redirect = vi.fn(async (_url: string | URL | Request, options?: RequestInit) => {
+      expect(options?.redirect).toBe('manual');
+      return new Response(null, { status: 302, headers: { location: 'https://evil.test/' } });
+    });
+    await expect(requestJson('https://xvyin.com/api/v1/internal/social-sync', { headers: { authorization: 'Bearer test' } }, 50, redirect)).rejects.toThrow('unavailable');
+    expect(redirect).toHaveBeenCalledTimes(1);
+    await expect(requestJson('https://api.github.com/users/jimmyshuixin', {}, 4, async () => new Response('12345'))).rejects.toThrow('invalid-response');
+  });
+  it('isolates platform failures and never forwards credentials to provider APIs', async () => {
+    const result = await collectSources(async (url, options) => {
+      const headers = new Headers(options?.headers);
+      expect(headers.has('authorization')).toBe(false);
+      expect(headers.has('cookie')).toBe(false);
+      if (String(url).includes('bilibili.com')) return new Response(null, { status: 412 });
+      if (String(url).includes('/repos?')) return json([repo('Home2.0')]);
+      return json(gh);
+    }, () => now);
+    expect(result.input.bilibili).toEqual({ status: 'failed', reason: 'upstream-blocked' });
+    expect(result.input.github.status).toBe('ok');
+    expect(SocialSyncInputSchema.parse({ claimId: 'a4538797-be8c-4814-8f14-e05e0ea69e35', ...result.input })).toBeDefined();
+  });
+  it('fetches fixed pagination URLs and omits project replacement if a later page fails', async () => {
+    const seen: string[] = [];
+    const result = await collectSources(async url => {
+      seen.push(String(url));
+      if (String(url).includes('bilibili.com')) return json(bili);
+      if (String(url).includes('page=2')) return new Response(null, { status: 429 });
+      if (String(url).includes('/repos?')) return json([repo('first')], { link: '<https://evil.test/private>; rel="next"' });
+      return json(gh);
+    }, () => now);
+    expect(seen.every(url => ['api.github.com', 'api.bilibili.com'].includes(new URL(url).hostname))).toBe(true);
+    expect(result.input.github.status === 'ok' && result.input.github.profile.repositories).toBeUndefined();
+    expect(result.warnings).toEqual(['github-repositories:rate-limited']);
+  });
+  it('rejects an untrusted OIDC request URL or runtime before transmitting its request token', async () => {
+    const fetcher = vi.fn();
+    await expect(oidcToken({ ...environment, ACTIONS_ID_TOKEN_REQUEST_URL: 'https://evil.test/token' }, fetcher)).rejects.toThrow('invalid-response');
+    await expect(oidcToken({ ...environment, GITHUB_EVENT_NAME: 'pull_request' }, fetcher)).rejects.toThrow('invalid-response');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('a rejected hourly claim makes no provider requests and no import', async () => {
+    const urls: string[] = [];
+    const logger = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await syncPublicData(environment, async url => {
+        urls.push(String(url));
+        return String(url).includes('actions.githubusercontent.com') ? json({ value: 'header.payload.signature' }) : json({ data: { accepted: false } });
+      });
+      expect(urls).toHaveLength(2);
+      expect(urls[1]).toBe('https://xvyin.com/api/v1/internal/social-sync/claim');
+    } finally { logger.mockRestore(); }
+  });
+});

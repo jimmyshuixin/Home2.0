@@ -8,3 +8,5 @@ export * from './media';
 export * from './api';
 export * from './engagement';
 export * from './bilibili';
+export * from './github';
+export * from './social-sync';

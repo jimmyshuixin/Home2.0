@@ -37,7 +37,7 @@ export function previewSource(item: MediaItem, compact = false): string | undefi
 export function externalMediaLink(ref?: { provider: string; contentId: string }): string | undefined {
   if (!ref?.contentId.trim()) return;
   const id = encodeURIComponent(ref.contentId.trim());
-  return ({ bilibili: `https://www.bilibili.com/video/${id}`, youtube: `https://www.youtube.com/watch?v=${id}`, tencent: `https://y.qq.com/n/ryqq/songDetail/${id}`, netease: `https://music.163.com/#/song?id=${id}` } as Record<string, string>)[ref.provider];
+  return ({ bilibili: `https://www.bilibili.com/video/${id}`, youtube: `https://www.youtube.com/watch?v=${id}`, douyin: `https://www.douyin.com/video/${id}`, tencent: `https://y.qq.com/n/ryqq/songDetail/${id}`, netease: `https://music.163.com/#/song?id=${id}` } as Record<string, string>)[ref.provider];
 }
 
 export function safePreviewLink(value?: string): string | undefined {

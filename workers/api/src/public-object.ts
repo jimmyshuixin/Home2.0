@@ -30,7 +30,7 @@ function objectHeaders(object: ObjectMetadata, contentType: string, privateView:
   const headers = new Headers({ 'content-type': contentType, 'etag': object.httpEtag, 'last-modified': object.uploaded.toUTCString(), 'x-content-type-options': 'nosniff', 'x-xvyin-release': releaseId, 'accept-ranges': 'bytes', 'cache-control': privateView ? 'private, no-store' : 'public, max-age=0, must-revalidate', 'referrer-policy': 'strict-origin-when-cross-origin' });
   if (privateView) { headers.set('x-xvyin-preview', 'true'); headers.set('x-robots-tag', 'noindex, nofollow, noarchive'); headers.set('vary', 'Cookie'); }
   if (contentType.startsWith('text/html')) {
-    headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob: https:; font-src 'self'; connect-src 'self'; frame-src 'self' https://player.bilibili.com https://www.youtube-nocookie.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+    headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob: https:; font-src 'self'; connect-src 'self'; frame-src 'self' https://player.bilibili.com https://www.youtube-nocookie.com https://open.douyin.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
     headers.set('x-frame-options', 'DENY');
   }
   return headers;

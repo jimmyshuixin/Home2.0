@@ -47,7 +47,7 @@ export const RichTextDocumentSchema: z.ZodType<RichTextDocument> = z.preprocess(
 
 /** Provider names are fixed. Resolvers must also enforce provider-specific allowed hosts. */
 export const ProviderRefSchema = z.object({
-  provider: z.enum(['tencent', 'netease', 'bilibili', 'youtube']),
+  provider: z.enum(['tencent', 'netease', 'bilibili', 'youtube', 'douyin']),
   contentId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/u),
 }).strict();
 export type ProviderRef = z.infer<typeof ProviderRefSchema>;

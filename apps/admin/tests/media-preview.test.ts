@@ -17,6 +17,7 @@ describe('private administrator media previews', () => {
   it('encodes provider IDs and excludes unsupported protocols from draft links', () => {
     expect(externalMediaLink({ provider: 'tencent', contentId: 'song/id?query' })).toBe('https://y.qq.com/n/ryqq/songDetail/song%2Fid%3Fquery');
     expect(externalMediaLink({ provider: 'unknown', contentId: 'id' })).toBeUndefined();
+    expect(externalMediaLink({ provider: 'douyin', contentId: '7661639577056136457' })).toBe('https://www.douyin.com/video/7661639577056136457');
     expect(safePreviewLink('javascript:alert(1)')).toBeUndefined();
     expect(safePreviewLink('data:text/html,hello')).toBeUndefined();
     expect(safePreviewLink('/creations/example')).toBe('https://xvyin.com/creations/example');

@@ -42,7 +42,7 @@ it('allows only the two fixed video-player origins in HTML, including private pr
   for (const preview of [false, true]) {
     const result = await serveObject(bucket, 'test-object', request(), 'text/html; charset=utf-8', preview, release, context);
     const csp = result.headers.get('content-security-policy')!;
-    expect(csp.split(';').map(value => value.trim()).find(value => value.startsWith('frame-src '))).toBe("frame-src 'self' https://player.bilibili.com https://www.youtube-nocookie.com");
+    expect(csp.split(';').map(value => value.trim()).find(value => value.startsWith('frame-src '))).toBe("frame-src 'self' https://player.bilibili.com https://www.youtube-nocookie.com https://open.douyin.com");
     expect(csp).toContain("connect-src 'self'");
     expect(csp).toContain("object-src 'none'");
     expect(result.headers.get('x-frame-options')).toBe('DENY');

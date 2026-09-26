@@ -1,6 +1,16 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { assert, ApiError } from './errors';
 import type { ReleaseJob } from './releases';
+/** Hourly trigger only. Provider data is fetched anonymously in the GitHub-hosted job. */
+export async function dispatchGitHubSocial(token: string | undefined, fetcher: typeof fetch = fetch): Promise<void> {
+  assert(token, 'SOCIAL_SYNC_NOT_CONFIGURED', 503, '平台定时同步尚未配置');
+  const response = await fetcher('https://api.github.com/repos/jimmyshuixin/Home2.0/actions/workflows/public-social-sync.yml/dispatches', {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'xvyin-public-social-sync', 'x-github-api-version': '2022-11-28' },
+    body: JSON.stringify({ ref: 'main' }), signal: AbortSignal.timeout(15000), redirect: 'manual',
+  });
+  await response.body?.cancel();
+  assert(response.status === 204, 'SOCIAL_SYNC_DISPATCH_FAILED', 503, '平台定时同步派发失败');
+}
 export async function dispatchGitHubMedia(assetId: string, config: { token: string; repository: string; ref: string; origin: string }): Promise<void> {
   assert(config.token && /^[\w.-]+\/[\w.-]+$/u.test(config.repository) && /^[A-Za-z0-9_-]+$/u.test(assetId), 'MEDIA_NOT_CONFIGURED', 503, '自动媒体处理尚未配置');
   const response = await fetch(`https://api.github.com/repos/${config.repository}/actions/workflows/v3-media.yml/dispatches`, { method: 'POST', headers: { authorization: `Bearer ${config.token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'xvyin-v3', 'x-github-api-version': '2022-11-28' }, body: JSON.stringify({ ref: config.ref.replace(/^refs\/heads\//u, ''), inputs: { asset_id: assetId, api_origin: config.origin } }), signal: AbortSignal.timeout(15000), redirect: 'manual' });
