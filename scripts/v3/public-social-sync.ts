@@ -2,8 +2,9 @@
 import { pathToFileURL } from 'node:url';
 import type { BilibiliProfile, GitHubProfile, GitHubRepository, SocialSyncInput } from '@xvyin/contracts';
 
-const ORIGIN = 'https://xvyin.com';
-const AUDIENCE = `${ORIGIN}/public-social-sync`;
+// Existing Pages gateway reaches the same API Worker without the custom domain's browser-only challenge.
+const ORIGIN = 'https://xvyin-v3-test.pages.dev';
+const AUDIENCE = 'https://xvyin.com/public-social-sync';
 const REPOSITORY = 'jimmyshuixin/Home2.0';
 const LOGIN = 'jimmyshuixin';
 const USER_ID = 121843277;
