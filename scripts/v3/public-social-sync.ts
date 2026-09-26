@@ -36,9 +36,9 @@ export async function requestJson(url: string, options: RequestInit = {}, maximu
         const parsed = await requestJson(ORIGIN, {}, 4096, async () => new Response(response.body, { status: 200, headers: response.headers }));
         const failure = record(record(parsed.data)?.error), fields = record(failure?.fields);
         if (failure?.code === 'SOCIAL_SYNC_UNAUTHORIZED') diagnostic.serverCode = 'SOCIAL_SYNC_UNAUTHORIZED';
-        for (const key of ['stage', 'reason']) {
+        for (const key of ['stage', 'reason', 'claim']) {
           const value = fields?.[key];
-          if (Array.isArray(value) && value.length === 1 && typeof value[0] === 'string' && ['signature', 'repository', 'source', 'workflow', 'identity', 'claim', 'jwks-fetch', 'timeout', 'no-key', 'invalid-token', 'invalid-key', 'unsupported', 'unknown', 'mismatch'].includes(value[0])) diagnostic[key] = value[0];
+          if (Array.isArray(value) && value.length === 1 && typeof value[0] === 'string' && ['signature', 'repository', 'source', 'workflow', 'identity', 'claim', 'jwks-fetch', 'timeout', 'no-key', 'invalid-token', 'invalid-key', 'unsupported', 'unknown', 'mismatch', 'iss', 'aud', 'nbf', 'iat', 'exp', 'sub'].includes(value[0])) diagnostic[key] = value[0];
         }
       } catch { /* Never expose an untrusted error body. */ }
     } else await response.body?.cancel();
