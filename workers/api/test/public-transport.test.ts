@@ -38,6 +38,18 @@ beforeEach(async () => {
 });
 afterAll(async () => { await mf.dispose(); });
 
+it('allows only the two fixed video-player origins in HTML, including private previews', async () => {
+  for (const preview of [false, true]) {
+    const result = await serveObject(bucket, 'test-object', request(), 'text/html; charset=utf-8', preview, release, context);
+    const csp = result.headers.get('content-security-policy')!;
+    expect(csp.split(';').map(value => value.trim()).find(value => value.startsWith('frame-src '))).toBe("frame-src 'self' https://player.bilibili.com https://www.youtube-nocookie.com");
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).toContain("object-src 'none'");
+    expect(result.headers.get('x-frame-options')).toBe('DENY');
+    await result.text();
+  }
+});
+
 describe('immutable public edge cache with current-publication checks', () => {
   it('caches only the complete small body and keeps browser revalidation mandatory', async () => {
     const first = await serve(); expect(await first.text()).toBe(body);

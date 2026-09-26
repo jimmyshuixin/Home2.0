@@ -1,0 +1,41 @@
+import { z } from 'zod';
+import { plainText, UtcTimestampSchema } from './common';
+
+export const BILIBILI_UID = '520237303' as const;
+export const BILIBILI_PROFILE_URL = 'https://space.bilibili.com/520237303' as const;
+
+/** Only Bilibili's image hosts may provide the public account avatar. */
+export function isBilibiliAvatarUrl(value: string): boolean {
+  if (value.length > 512 || /[\s\\\u0000-\u001f\u007f]/u.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && /^i[012]\.hdslb\.com$/u.test(url.hostname)
+      && !url.username && !url.password && !url.port && !url.search && !url.hash
+      && /^\/bfs\/face\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.(?:jpe?g|png|webp)$/iu.test(url.pathname);
+  } catch { return false; }
+}
+
+const publicCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
+export const BilibiliProfileSchema = z.object({
+  uid: z.literal(BILIBILI_UID),
+  profileUrl: z.literal(BILIBILI_PROFILE_URL),
+  name: plainText(80, 1).nullable(),
+  signature: plainText(500).nullable(),
+  avatarUrl: z.string().refine(isBilibiliAvatarUrl).nullable(),
+  followers: publicCount,
+  videoCount: publicCount,
+  likes: publicCount,
+  updatedAt: UtcTimestampSchema.nullable(),
+  status: z.enum(['fresh', 'stale', 'unavailable']),
+  // A fixed public UID association is not proof of an OAuth authorization.
+  authorization: z.literal('public'),
+}).strict().superRefine((profile, context) => {
+  if (profile.status === 'unavailable') {
+    if ([profile.name, profile.signature, profile.avatarUrl, profile.followers, profile.videoCount, profile.likes, profile.updatedAt].some(value => value !== null)) {
+      context.addIssue({ code: 'custom', message: 'Unavailable profiles must not claim live account data' });
+    }
+  } else if (!profile.name || !profile.updatedAt) {
+    context.addIssue({ code: 'custom', message: 'Available profiles require a name and update timestamp' });
+  }
+});
+export type BilibiliProfile = z.infer<typeof BilibiliProfileSchema>;

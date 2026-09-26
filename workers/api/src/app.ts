@@ -17,6 +17,7 @@ import { Releases, emptySnapshot, type Snapshot, type ReleaseJob, type ReleaseMa
 import { renderPublic, serveObject, publicIndex } from './render';
 import { AnalyticsQuerySchema, EngagementTargetSchema, LikeInputSchema, VisitInputSchema } from '@xvyin/contracts';
 import { cachedLikeCount, Engagement, guardEngagementRequest } from './engagement';
+import { readBilibiliProfile, type BilibiliFetch } from './bilibili';
 export interface Runtime {
   store: Store; bucket: R2Bucket; auth: AuthProvider; now: () => number; secureCookies: boolean;
   allowedOrigins: string[]; privacySalt: string; adminUsername: string; codeSha: string;
@@ -25,6 +26,7 @@ export interface Runtime {
   music?: (request: Request, snapshot: Snapshot, requestId: string, privateView?: boolean) => Promise<Response>;
   dispatchMedia?: (assetId: string) => Promise<void>;
   publicReadCache?: PublicReadCache;
+  bilibiliFetch?: BilibiliFetch;
 }
 interface CommentRecord { id: string; nickname: string; body: string; targetType: 'guestbook' | 'creation' | 'album'; targetId: string | null; status: 'pending' | 'approved' | 'rejected' | 'hidden'; version: number; createdAt: string; updatedAt: string }
 type Context = { Variables: { requestId: string; session: Session; previewId: string | null } };
@@ -89,6 +91,7 @@ export function createApi(runtime: Runtime) {
   });
   app.get('/api/v1/health', c => response({ status: 'ok', schemaVersion: 1 }, c.get('requestId')));
   app.get('/api/v1/time', c => response({ now: new Date(runtime.now()).toISOString(), todayDate: shanghaiDate(runtime.now()), timezone: 'Asia/Shanghai' }, c.get('requestId')));
+  app.get('/api/v1/bilibili/profile', async c => response(await readBilibiliProfile({ now: runtime.now, cache: runtime.publicReadCache, fetcher: runtime.bilibiliFetch }), c.get('requestId')));
   app.post('/api/v1/auth/login', async c => {
     await limit(c.req.raw, 'login', 8, 15 * 60_000); const values = loginInput.parse(await input(c.req.raw, 4096));
     const identity = await runtime.auth.signIn(values), created = await sessions.create(identity);

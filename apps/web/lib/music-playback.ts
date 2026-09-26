@@ -15,7 +15,7 @@ interface PlaybackOptions {
   nextSelection?(): MusicSelection | null
   onState?(state: MusicPlaybackState): void
   activateFocus?(audio: PlaybackAudio): void
-  subscribeFocus?(listener: (audio: PlaybackAudio) => void): () => void
+  subscribeFocus?(listener: (audio: Pick<PlaybackAudio, 'pause'>) => void): () => void
 }
 function safeQqUrl(value: string): string {
   const url = new URL(value)

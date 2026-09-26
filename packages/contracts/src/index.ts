@@ -7,3 +7,4 @@ export * from './models';
 export * from './media';
 export * from './api';
 export * from './engagement';
+export * from './bilibili';
