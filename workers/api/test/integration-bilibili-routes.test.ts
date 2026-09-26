@@ -20,6 +20,14 @@ async function login(api: ReturnType<typeof createApi>) {
   return { cookie: response.headers.get('set-cookie')!.split(';')[0]!, csrf: body.data.csrfToken };
 }
 describe('Bilibili administrator route boundaries', () => {
+  it('preserves an actionable dependency error when Bilibili blocks the server', async () => {
+    runtime.bilibiliCredentialKey = 'aa'.repeat(32);
+    runtime.bilibiliFetch = vi.fn(async () => new Response('blocked', { status: 412 }));
+    const api = createApi(runtime), session = await login(api);
+    const start = await api.app.request(`${origin}/api/v1/admin/bilibili/qr`, { method: 'POST', headers: { origin, cookie: session.cookie, 'x-csrf-token': session.csrf } });
+    expect(start.status).toBe(424);
+    expect(await start.json()).toMatchObject({ error: { code: 'BILIBILI_UPSTREAM_BLOCKED', message: 'B站暂时限制了服务器连接，请稍后重试' } });
+  });
   it.each([
     ['GET', '/api/v1/admin/bilibili'],
     ['POST', '/api/v1/admin/bilibili/qr'],

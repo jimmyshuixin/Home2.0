@@ -119,7 +119,9 @@ export class BilibiliBinding {
     catch (error) {
       if (error instanceof ApiError) throw error;
       const reason = error instanceof BilibiliUpstreamError ? error.reason : 'invalid-response';
-      throw new ApiError(`BILIBILI_${reason.toUpperCase().replaceAll('-', '_')}`, 502, reason === 'wrong-account' ? '请使用 UID 520237303 的B站账号扫码' : 'B站服务暂时不可用，请稍后重试');
+      // A provider rejection is a failed dependency. The production edge replaces
+      // 502 responses with its own problem document, losing the actionable code.
+      throw new ApiError(`BILIBILI_${reason.toUpperCase().replaceAll('-', '_')}`, 424, reason === 'wrong-account' ? '请使用 UID 520237303 的B站账号扫码' : reason === 'upstream-blocked' ? 'B站暂时限制了服务器连接，请稍后重试' : 'B站服务暂时不可用，请稍后重试');
     }
   }
   async pollQr(sessionId: string, transactionId: string): Promise<BilibiliQrPoll> {
