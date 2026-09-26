@@ -160,7 +160,10 @@ export async function syncPublicData(environment: Environment = process.env, fet
       ref: claims?.ref === 'refs/heads/main' && claims?.ref_type === 'branch',
       event: claims?.event_name === 'workflow_dispatch', runner: claims?.runner_environment === 'github-hosted',
       workflow: claims?.workflow_ref === `${REPOSITORY}/.github/workflows/public-social-sync.yml@refs/heads/main`,
-      sha: claims?.workflow_sha === claims?.sha, direct: claims?.job_workflow_ref === undefined,
+      sha: typeof claims?.sha === 'string' && /^[a-f0-9]{40}$/u.test(claims.sha) && claims.workflow_sha === claims.sha,
+      direct: claims?.job_workflow_ref === undefined,
+      jobRefIsSameWorkflow: claims?.job_workflow_ref === claims?.workflow_ref,
+      jobShaIsSameCommit: claims?.job_workflow_sha === claims?.sha,
       notBefore: typeof claims?.nbf === 'number' && claims.nbf <= timestamp,
       expires: typeof claims?.exp === 'number' && claims.exp > timestamp,
     } }));
