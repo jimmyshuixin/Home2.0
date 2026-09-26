@@ -31,14 +31,21 @@ export async function requestJson(url: string, options: RequestInit = {}, maximu
   catch (error) { throw new SyncError(reason(error)); }
   if (response.status !== 200) {
     const diagnostic: Record<string, string> = {};
+    if (new URL(url).origin === ORIGIN) {
+      diagnostic.responseType = response.headers.get('content-type')?.startsWith('text/html') ? 'html' : response.headers.get('content-type')?.startsWith('application/json') ? 'json' : 'other';
+      if (response.headers.get('cf-mitigated') === 'challenge') diagnostic.challenge = 'true';
+    }
     if (new URL(url).origin === ORIGIN && response.headers.get('content-type')?.startsWith('application/json')) {
       try {
         const parsed = await requestJson(ORIGIN, {}, 4096, async () => new Response(response.body, { status: 200, headers: response.headers }));
         const failure = record(record(parsed.data)?.error), fields = record(failure?.fields);
-        if (failure?.code === 'SOCIAL_SYNC_UNAUTHORIZED') diagnostic.serverCode = 'SOCIAL_SYNC_UNAUTHORIZED';
-        for (const key of ['stage', 'reason', 'claim']) {
+        if (['ORIGIN_REJECTED', 'RUNNER_UNAUTHORIZED'].includes(String(failure?.code))) diagnostic.serverCode = String(failure?.code);
+        if (failure?.code === 'SOCIAL_SYNC_UNAUTHORIZED') {
+          diagnostic.serverCode = 'SOCIAL_SYNC_UNAUTHORIZED';
+          for (const key of ['stage', 'reason', 'claim']) {
           const value = fields?.[key];
           if (Array.isArray(value) && value.length === 1 && typeof value[0] === 'string' && ['signature', 'repository', 'source', 'workflow', 'identity', 'claim', 'jwks-fetch', 'timeout', 'no-key', 'invalid-token', 'invalid-key', 'unsupported', 'unknown', 'mismatch', 'iss', 'aud', 'nbf', 'iat', 'exp', 'sub'].includes(value[0])) diagnostic[key] = value[0];
+          }
         }
       } catch { /* Never expose an untrusted error body. */ }
     } else await response.body?.cancel();
