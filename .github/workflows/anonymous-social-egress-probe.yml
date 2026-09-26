@@ -1,0 +1,80 @@
+name: Anonymous social API egress probe
+
+on:
+  push:
+    branches:
+      - codex/bilibili-anonymous-probe-20260926
+    paths:
+      - .github/workflows/anonymous-social-egress-probe.yml
+
+permissions: {}
+
+jobs:
+  anonymous-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Read public Bilibili and GitHub data without credentials
+        shell: python
+        run: |
+          import datetime
+          import json
+          import urllib.error
+          import urllib.request
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          opener = urllib.request.build_opener(NoRedirect())
+          outcomes = []
+          for platform, url in [
+              ('bilibili', 'https://api.bilibili.com/x/web-interface/card?mid=520237303'),
+              ('github', 'https://api.github.com/users/jimmyshuixin'),
+          ]:
+              result = {
+                  'platform': platform,
+                  'capturedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                  'authenticated': False,
+                  'ok': False,
+              }
+              request = urllib.request.Request(url, headers={
+                  'User-Agent': 'xvyin-public-data-probe/1.0',
+                  'Accept': 'application/json',
+              })
+              try:
+                  with opener.open(request, timeout=10) as response:
+                      result['httpStatus'] = response.status
+                      body = response.read(131073)
+                      if len(body) > 131072:
+                          raise ValueError('response_too_large')
+                      data = json.loads(body)
+                      if platform == 'bilibili':
+                          result['code'] = data.get('code')
+                          detail = data.get('data') or {}
+                          card = detail.get('card') or {}
+                          result['identityMatched'] = str(card.get('mid')) == '520237303'
+                          result['availableFields'] = [name for name, value in {
+                              'name': card.get('name'),
+                              'avatar': card.get('face'),
+                              'signature': card.get('sign'),
+                              'followers': detail.get('follower', card.get('fans')),
+                              'videoCount': detail.get('archive_count'),
+                              'likes': detail.get('like_num'),
+                          }.items() if value is not None]
+                          result['ok'] = data.get('code') == 0 and result['identityMatched']
+                      else:
+                          result['identityMatched'] = data.get('login') == 'jimmyshuixin'
+                          result['availableFields'] = [name for name in [
+                              'name', 'avatar_url', 'bio', 'public_repos', 'followers', 'following',
+                          ] if data.get(name) is not None]
+                          result['ok'] = result['identityMatched']
+              except urllib.error.HTTPError as error:
+                  result['httpStatus'] = error.code
+                  result['error'] = 'http_error'
+              except Exception as error:
+                  result['error'] = type(error).__name__
+              outcomes.append(result)
+              print(json.dumps(result, ensure_ascii=True, sort_keys=True))
+          if not all(result['ok'] for result in outcomes):
+              raise SystemExit(1)
