@@ -146,49 +146,49 @@ export async function syncPublicData(environment: Environment = process.env, fet
   // Fixed stage names and HTTP status only: never log request URLs, headers, tokens or response bodies.
   let stage = 'claim-identity';
   try {
-  const claimToken = await oidcToken(environment, fetcher);
-  // Diagnostic booleans are not authorization; the server independently verifies the signature and every claim.
-  try {
-    const claims = record(JSON.parse(Buffer.from(claimToken.split('.')[1]!, 'base64url').toString('utf8')));
-    const timestamp = Math.floor(Date.now() / 1000);
-    console.log(JSON.stringify({ identityChecks: {
-      repository: claims?.repository === REPOSITORY && claims?.repository_id === '1252970286',
-      owner: claims?.repository_owner === LOGIN && claims?.repository_owner_id === String(USER_ID),
-      public: claims?.repository_visibility === 'public',
-      subject: [`repo:${REPOSITORY}:ref:refs/heads/main`, `repo:${LOGIN}@${USER_ID}/Home2.0@1252970286:ref:refs/heads/main`].includes(String(claims?.sub)),
-      audience: claims?.aud === AUDIENCE, issuer: claims?.iss === 'https://token.actions.githubusercontent.com',
-      ref: claims?.ref === 'refs/heads/main' && claims?.ref_type === 'branch',
-      event: claims?.event_name === 'workflow_dispatch', runner: claims?.runner_environment === 'github-hosted',
-      workflow: claims?.workflow_ref === `${REPOSITORY}/.github/workflows/public-social-sync.yml@refs/heads/main`,
-      sha: typeof claims?.sha === 'string' && /^[a-f0-9]{40}$/u.test(claims.sha) && claims.workflow_sha === claims.sha,
-      direct: claims?.job_workflow_ref === undefined,
-      jobRefIsSameWorkflow: claims?.job_workflow_ref === claims?.workflow_ref,
-      jobShaIsSameCommit: claims?.job_workflow_sha === claims?.sha,
-      notBefore: typeof claims?.nbf === 'number' && claims.nbf <= timestamp,
-      expires: typeof claims?.exp === 'number' && claims.exp > timestamp,
-    } }));
-  } catch { console.log('Identity diagnostic unavailable.'); }
-  stage = 'claim';
-  const claimResponse = await requestJson(`${ORIGIN}/api/v1/internal/social-sync/claim`, { method: 'POST', headers: { authorization: `Bearer ${claimToken}` } }, 32 * 1024, fetcher);
-  const claim = record(record(claimResponse.data)?.data);
-  if (claim?.accepted === false) { console.log('Public social refresh already claimed this hour; skipped.'); return; }
-  if (claim?.accepted !== true || typeof claim.claimId !== 'string' || !/^[a-f0-9-]{36}$/u.test(claim.claimId)) throw new SyncError('invalid-response');
-  stage = 'public-sources';
-  const collected = await collectSources(fetcher);
-  stage = 'import-identity';
-  const importToken = await oidcToken(environment, fetcher);
-  stage = 'import';
-  const imported = await requestJson(`${ORIGIN}/api/v1/internal/social-sync`, {
-    method: 'POST', headers: { authorization: `Bearer ${importToken}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ claimId: claim.claimId, ...collected.input }),
-  }, 32 * 1024, fetcher);
-  if (record(record(imported.data)?.data)?.imported !== true) throw new SyncError('invalid-response');
-  for (const [platform, result] of Object.entries(collected.input)) {
-    console.log(JSON.stringify({ platform, status: result.status, ...(result.status === 'ok' ? { capturedAt: result.profile.updatedAt } : { reason: result.reason }) }));
-  }
-  for (const warning of collected.warnings) console.warn(warning);
-  if (collected.warnings.length || Object.values(collected.input).some(result => result.status === 'failed')) process.exitCode = 1;
-  } catch (error) {
+    const claimToken = await oidcToken(environment, fetcher);
+    // Diagnostic booleans are not authorization; the server independently verifies the signature and every claim.
+    try {
+      const claims = record(JSON.parse(Buffer.from(claimToken.split('.')[1]!, 'base64url').toString('utf8')));
+      const timestamp = Math.floor(Date.now() / 1000);
+      console.log(JSON.stringify({ identityChecks: {
+        repository: claims?.repository === REPOSITORY && claims?.repository_id === '1252970286',
+        owner: claims?.repository_owner === LOGIN && claims?.repository_owner_id === String(USER_ID),
+        public: claims?.repository_visibility === 'public',
+        subject: [`repo:${REPOSITORY}:ref:refs/heads/main`, `repo:${LOGIN}@${USER_ID}/Home2.0@1252970286:ref:refs/heads/main`].includes(String(claims?.sub)),
+        audience: claims?.aud === AUDIENCE, issuer: claims?.iss === 'https://token.actions.githubusercontent.com',
+        ref: claims?.ref === 'refs/heads/main' && claims?.ref_type === 'branch',
+        event: claims?.event_name === 'workflow_dispatch', runner: claims?.runner_environment === 'github-hosted',
+        workflow: claims?.workflow_ref === `${REPOSITORY}/.github/workflows/public-social-sync.yml@refs/heads/main`,
+        sha: typeof claims?.sha === 'string' && /^[a-f0-9]{40}$/u.test(claims.sha) && claims.workflow_sha === claims.sha,
+        direct: claims?.job_workflow_ref === undefined,
+        jobRefIsSameWorkflow: claims?.job_workflow_ref === claims?.workflow_ref,
+        jobShaIsSameCommit: claims?.job_workflow_sha === claims?.sha,
+        notBefore: typeof claims?.nbf === 'number' && claims.nbf <= timestamp,
+        expires: typeof claims?.exp === 'number' && claims.exp > timestamp,
+      } }));
+    } catch { console.log('Identity diagnostic unavailable.'); }
+    stage = 'claim';
+    const claimResponse = await requestJson(`${ORIGIN}/api/v1/internal/social-sync/claim`, { method: 'POST', headers: { authorization: `Bearer ${claimToken}` } }, 32 * 1024, fetcher);
+    const claim = record(record(claimResponse.data)?.data);
+    if (claim?.accepted === false) { console.log('Public social refresh already claimed this hour; skipped.'); return; }
+    if (claim?.accepted !== true || typeof claim.claimId !== 'string' || !/^[a-f0-9-]{36}$/u.test(claim.claimId)) throw new SyncError('invalid-response');
+    stage = 'public-sources';
+    const collected = await collectSources(fetcher);
+    stage = 'import-identity';
+    const importToken = await oidcToken(environment, fetcher);
+    stage = 'import';
+    const imported = await requestJson(`${ORIGIN}/api/v1/internal/social-sync`, {
+      method: 'POST', headers: { authorization: `Bearer ${importToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ claimId: claim.claimId, ...collected.input }),
+    }, 32 * 1024, fetcher);
+    if (record(record(imported.data)?.data)?.imported !== true) throw new SyncError('invalid-response');
+    for (const [platform, result] of Object.entries(collected.input)) {
+      console.log(JSON.stringify({ platform, status: result.status, ...(result.status === 'ok' ? { capturedAt: result.profile.updatedAt } : { reason: result.reason }) }));
+    }
+    for (const warning of collected.warnings) console.warn(warning);
+    if (collected.warnings.length || Object.values(collected.input).some(result => result.status === 'failed')) process.exitCode = 1;
+    } catch (error) {
     console.error(JSON.stringify({ stage, reason: reason(error), ...(error instanceof SyncError && error.status ? { status: error.status } : {}) }));
     throw error;
   }
