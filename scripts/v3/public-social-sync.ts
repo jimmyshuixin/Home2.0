@@ -12,7 +12,8 @@ type Fetcher = typeof fetch;
 type Environment = Readonly<Record<string, string | undefined>>;
 class SyncError extends Error {
   readonly reason: Failure;
-  constructor(reason: Failure) { super(reason); this.reason = reason; }
+  readonly status?: number;
+  constructor(reason: Failure, status?: number) { super(reason); this.reason = reason; this.status = status; }
 }
 const record = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const count = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -29,7 +30,7 @@ export async function requestJson(url: string, options: RequestInit = {}, maximu
   catch (error) { throw new SyncError(reason(error)); }
   if (response.status !== 200) {
     await response.body?.cancel();
-    throw new SyncError(response.status === 429 || response.headers.get('x-ratelimit-remaining') === '0' ? 'rate-limited' : [403, 412].includes(response.status) ? 'upstream-blocked' : 'unavailable');
+    throw new SyncError(response.status === 429 || response.headers.get('x-ratelimit-remaining') === '0' ? 'rate-limited' : [403, 412].includes(response.status) ? 'upstream-blocked' : 'unavailable', response.status);
   }
   const length = response.headers.get('content-length');
   if (!response.body || (length !== null && (!/^\d+$/u.test(length) || Number(length) > maximum))) {
@@ -142,13 +143,38 @@ export async function oidcToken(environment: Environment, fetcher: Fetcher = fet
 }
 
 export async function syncPublicData(environment: Environment = process.env, fetcher: Fetcher = fetch): Promise<void> {
+  // Fixed stage names and HTTP status only: never log request URLs, headers, tokens or response bodies.
+  let stage = 'claim-identity';
+  try {
   const claimToken = await oidcToken(environment, fetcher);
+  // Diagnostic booleans are not authorization; the server independently verifies the signature and every claim.
+  try {
+    const claims = record(JSON.parse(Buffer.from(claimToken.split('.')[1]!, 'base64url').toString('utf8')));
+    const timestamp = Math.floor(Date.now() / 1000);
+    console.log(JSON.stringify({ identityChecks: {
+      repository: claims?.repository === REPOSITORY && claims?.repository_id === '1252970286',
+      owner: claims?.repository_owner === LOGIN && claims?.repository_owner_id === String(USER_ID),
+      public: claims?.repository_visibility === 'public',
+      subject: [`repo:${REPOSITORY}:ref:refs/heads/main`, `repo:${LOGIN}@${USER_ID}/Home2.0@1252970286:ref:refs/heads/main`].includes(String(claims?.sub)),
+      audience: claims?.aud === AUDIENCE, issuer: claims?.iss === 'https://token.actions.githubusercontent.com',
+      ref: claims?.ref === 'refs/heads/main' && claims?.ref_type === 'branch',
+      event: claims?.event_name === 'workflow_dispatch', runner: claims?.runner_environment === 'github-hosted',
+      workflow: claims?.workflow_ref === `${REPOSITORY}/.github/workflows/public-social-sync.yml@refs/heads/main`,
+      sha: claims?.workflow_sha === claims?.sha, direct: claims?.job_workflow_ref === undefined,
+      notBefore: typeof claims?.nbf === 'number' && claims.nbf <= timestamp,
+      expires: typeof claims?.exp === 'number' && claims.exp > timestamp,
+    } }));
+  } catch { console.log('Identity diagnostic unavailable.'); }
+  stage = 'claim';
   const claimResponse = await requestJson(`${ORIGIN}/api/v1/internal/social-sync/claim`, { method: 'POST', headers: { authorization: `Bearer ${claimToken}` } }, 32 * 1024, fetcher);
   const claim = record(record(claimResponse.data)?.data);
   if (claim?.accepted === false) { console.log('Public social refresh already claimed this hour; skipped.'); return; }
   if (claim?.accepted !== true || typeof claim.claimId !== 'string' || !/^[a-f0-9-]{36}$/u.test(claim.claimId)) throw new SyncError('invalid-response');
+  stage = 'public-sources';
   const collected = await collectSources(fetcher);
+  stage = 'import-identity';
   const importToken = await oidcToken(environment, fetcher);
+  stage = 'import';
   const imported = await requestJson(`${ORIGIN}/api/v1/internal/social-sync`, {
     method: 'POST', headers: { authorization: `Bearer ${importToken}`, 'content-type': 'application/json' },
     body: JSON.stringify({ claimId: claim.claimId, ...collected.input }),
@@ -159,6 +185,10 @@ export async function syncPublicData(environment: Environment = process.env, fet
   }
   for (const warning of collected.warnings) console.warn(warning);
   if (collected.warnings.length || Object.values(collected.input).some(result => result.status === 'failed')) process.exitCode = 1;
+  } catch (error) {
+    console.error(JSON.stringify({ stage, reason: reason(error), ...(error instanceof SyncError && error.status ? { status: error.status } : {}) }));
+    throw error;
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
