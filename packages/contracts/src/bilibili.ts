@@ -26,7 +26,7 @@ export const BilibiliProfileSchema = z.object({
   videoCount: publicCount,
   likes: publicCount,
   updatedAt: UtcTimestampSchema.nullable(),
-  status: z.enum(['fresh', 'stale', 'unavailable']),
+  status: z.enum(['fresh', 'stale', 'snapshot', 'unavailable']),
   // A fixed public UID association is not proof of an OAuth authorization.
   authorization: z.literal('public'),
 }).strict().superRefine((profile, context) => {

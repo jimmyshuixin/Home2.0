@@ -1,12 +1,14 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BILIBILI_PROFILE_URL, BILIBILI_UID, BilibiliProfileSchema } from '@xvyin/contracts';
-import { readBilibiliProfile, type BilibiliFetch } from '../src/bilibili';
+import { readBilibiliProfile as readProfile, type BilibiliFetch } from '../src/bilibili';
+import packagedSnapshot from '../src/bilibili-profile-snapshot.json';
 import { createApi, type Runtime } from '../src/app';
 import type { PublicReadCache } from '../src/public-read-cache';
 import { MemoryStore } from '../src/store/memory';
 
 const instant = Date.UTC(2026, 8, 26, 8);
 const HOUR = 60 * 60_000;
+const readBilibiliProfile = (options: Parameters<typeof readProfile>[0]) => readProfile({ fallbackSnapshot: null, ...options });
 const example = () => ({
   code: 0,
   data: {
@@ -23,7 +25,8 @@ function edgeCache() {
   } };
   return { context, get saved() { return saved; }, set saved(value: Response | undefined) { saved = value; } };
 }
-afterEach(() => { vi.useRealTimers(); });
+beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('fixed public Bilibili profile', () => {
   it('returns only sanitized public fields from the fixed UID without forwarding visitor information', async () => {
@@ -90,6 +93,7 @@ describe('fixed public Bilibili profile', () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect((await result).status).toBe('unavailable');
     expect(fetcher.mock.calls[0]![0].signal.aborted).toBe(true);
+    expect(console.warn).toHaveBeenLastCalledWith(JSON.stringify({ level: 'warn', code: 'BILIBILI_PUBLIC_PROFILE_UNAVAILABLE', reason: 'timeout' }));
 
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } });
@@ -193,5 +197,65 @@ describe('fixed public Bilibili profile', () => {
     const request = fetcher.mock.calls[0]![0];
     expect(request.url).toBe('https://api.bilibili.com/x/web-interface/card?mid=520237303');
     expect([...request.headers.keys()]).toEqual(['accept']);
+  });
+});
+
+describe('dated Bilibili public snapshot fallback', () => {
+  const afterCapture = Date.parse(packagedSnapshot.updatedAt) + 48 * HOUR;
+  const failingFetch = () => vi.fn<BilibiliFetch>(async () => { throw new Error('Private upstream diagnostics must never be logged'); });
+
+  it('packages only the fixed UID public schema with its original verified capture timestamp', async () => {
+    const snapshot = BilibiliProfileSchema.parse(packagedSnapshot);
+    expect(snapshot).toMatchObject({ uid: BILIBILI_UID, profileUrl: BILIBILI_PROFILE_URL, status: 'snapshot', authorization: 'public' });
+    expect(snapshot.name).toBeTruthy(); expect(snapshot.followers).not.toBeNull();
+    expect(Number.isFinite(Date.parse(snapshot.updatedAt!))).toBe(true);
+    const result = await readProfile({ now: () => afterCapture, fetcher: failingFetch() });
+    expect(result).toEqual(snapshot);
+    expect(result.updatedAt).toBe(packagedSnapshot.updatedAt);
+    expect(console.warn).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ level: 'warn', code: 'BILIBILI_PUBLIC_PROFILE_UNAVAILABLE', reason: 'network' }));
+  });
+
+  it.each([
+    ['disabled', null],
+    ['invalid timestamp', { ...packagedSnapshot, updatedAt: 'invalid' }],
+    ['future timestamp', { ...packagedSnapshot, updatedAt: new Date(afterCapture + 1).toISOString() }],
+    ['wrong UID', { ...packagedSnapshot, uid: '1' }],
+    ['claims fresh', { ...packagedSnapshot, status: 'fresh' }],
+    ['claims stale', { ...packagedSnapshot, status: 'stale' }],
+    ['extra private data', { ...packagedSnapshot, cookie: 'private-fixture' }],
+    ['invalid count', { ...packagedSnapshot, followers: -1 }],
+  ])('fails safely when the historical snapshot is %s', async (_label, fallbackSnapshot) => {
+    expect((await readBilibiliProfile({ now: () => afterCapture, fetcher: failingFetch(), fallbackSnapshot })).status).toBe('unavailable');
+  });
+
+  it('keeps snapshots historical, backs off failures for five minutes, and lets a fresh response supersede them', async () => {
+    const cache = edgeCache(), fetcher = failingFetch();
+    let clock = afterCapture;
+    const read = () => readProfile({ now: () => clock, cache: cache.context, fetcher });
+    expect(await read()).toEqual(packagedSnapshot);
+    expect(await cache.saved!.clone().json()).toEqual({ profile: null, checkedAt: clock });
+    expect(cache.saved?.headers.get('cache-control')).toBe('public, max-age=300');
+    clock += 5 * 60_000 - 1;
+    expect(await read()).toEqual(packagedSnapshot); expect(fetcher).toHaveBeenCalledTimes(1);
+    clock += 1;
+    fetcher.mockImplementation(async () => Response.json(example()));
+    const fresh = await read();
+    expect(fresh).toMatchObject({ status: 'fresh', name: '测试 UP', updatedAt: new Date(clock).toISOString() });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const saved = await cache.saved!.clone().json() as { profile: unknown };
+    expect(saved.profile).toEqual(fresh);
+  });
+
+  it('prefers retained stale data over the older snapshot and returns the snapshot only after its 24-hour lifetime', async () => {
+    const cache = edgeCache(), fetcher = successfulFetch();
+    let clock = afterCapture;
+    const read = () => readProfile({ now: () => clock, cache: cache.context, fetcher });
+    const fresh = await read();
+    clock += HOUR;
+    fetcher.mockImplementation(async () => Response.json({ code: -352, data: null, message: 'untrusted details' }));
+    expect(await read()).toEqual({ ...fresh, status: 'stale' });
+    expect(console.warn).toHaveBeenLastCalledWith(JSON.stringify({ level: 'warn', code: 'BILIBILI_PUBLIC_PROFILE_UNAVAILABLE', reason: 'upstream-unavailable' }));
+    clock += 23 * HOUR;
+    expect(await read()).toEqual(packagedSnapshot);
   });
 });

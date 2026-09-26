@@ -10,6 +10,8 @@ The server reads the fixed public website endpoint `https://api.bilibili.com/x/w
 
 Existing optional edge cache provides one hour of freshness, at most 24 hours of stale retention, and five minutes of failure backoff. Cache eviction or unavailability can cause a new bounded upstream request. The API performs no database writes. Responses have a five-second total deadline and a 64 KiB body limit. `stale` retains the original update time; `unavailable` never fabricates a count. Only fixed Bilibili avatar hosts and paths are accepted.
 
+When the server cannot retrieve current data, a separately validated public snapshot in `workers/api/src/bilibili-profile-snapshot.json` can be returned with status `snapshot`. Its original timestamp is always shown and it is never labelled current or authenticated. This historical snapshot has no automatic expiry; fresh upstream data supersedes it when available. Refresh the packaged snapshot only from an actual successful sanitized response and include the new capture timestamp in the next deployment. No periodic GitHub job or guaranteed live synchronization is configured.
+
 ## Video embeds
 
 The existing `providerRef` remains the source of truth. Valid BV/av IDs produce a Bilibili official iframe; valid YouTube IDs use the privacy-enhanced iframe host. The iframe is mounted only after an explicit click, with autoplay disabled, a reserved responsive area, fullscreen, close/reload controls and an original-platform link. Loading an iframe does not prove the video is playable. Region, login, browser, platform and uploader restrictions still apply.

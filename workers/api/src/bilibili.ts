@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { BILIBILI_PROFILE_URL, BILIBILI_UID, BilibiliProfileSchema, isBilibiliAvatarUrl, type BilibiliProfile } from '@xvyin/contracts';
 import { cacheRead, cacheWrite, publicCacheKey, type PublicReadCache } from './public-read-cache';
+import packagedSnapshot from './bilibili-profile-snapshot.json';
 
 const UPSTREAM_URL = `https://api.bilibili.com/x/web-interface/card?mid=${BILIBILI_UID}`;
 const FRESH_MS = 60 * 60_000;
@@ -17,10 +18,26 @@ interface ProfileDependencies {
   now: () => number;
   cache?: PublicReadCache;
   fetcher?: BilibiliFetch;
+  /** Undefined uses the packaged public snapshot; null explicitly disables it. */
+  fallbackSnapshot?: unknown;
+}
+
+type FailureReason = 'timeout' | 'network' | 'upstream-http-error' | 'upstream-unavailable' | 'invalid-response';
+class ProfileReadError extends Error {
+  constructor(readonly reason: FailureReason) { super(reason); }
 }
 
 function unavailable(): BilibiliProfile {
   return { uid: BILIBILI_UID, profileUrl: BILIBILI_PROFILE_URL, name: null, signature: null, avatarUrl: null, followers: null, videoCount: null, likes: null, updatedAt: null, status: 'unavailable', authorization: 'public' };
+}
+
+function snapshotFallback(value: unknown, now: number): BilibiliProfile {
+  const result = BilibiliProfileSchema.safeParse(value);
+  if (!result.success || result.data.status !== 'snapshot') return unavailable();
+  const capturedAt = Date.parse(result.data.updatedAt || '');
+  // This is dated historical public data, never a refreshed cache entry.
+  if (!Number.isFinite(capturedAt) || capturedAt > now) return unavailable();
+  return result.data;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -45,20 +62,23 @@ function avatar(value: unknown): string | null {
 
 function publicProfile(value: unknown, now: number): BilibiliProfile {
   const root = record(value), data = record(root?.data), card = record(data?.card);
-  if (root?.code !== 0 || !card || String(card.mid) !== BILIBILI_UID) throw new Error('Bilibili profile unavailable');
-  return BilibiliProfileSchema.parse({
+  if (root && typeof root.code === 'number' && root.code !== 0) throw new ProfileReadError('upstream-unavailable');
+  if (root?.code !== 0 || !card || String(card.mid) !== BILIBILI_UID) throw new ProfileReadError('invalid-response');
+  const result = BilibiliProfileSchema.safeParse({
     uid: BILIBILI_UID, profileUrl: BILIBILI_PROFILE_URL,
     name: text(card.name, 80), signature: text(card.sign, 500), avatarUrl: avatar(card.face),
     followers: count(data?.follower), videoCount: count(data?.archive_count), likes: count(data?.like_num),
     updatedAt: new Date(now).toISOString(), status: 'fresh', authorization: 'public',
   });
+  if (!result.success) throw new ProfileReadError('invalid-response');
+  return result.data;
 }
 
 async function boundedResponseJson(response: Response, max: number, signal?: AbortSignal): Promise<unknown> {
   const declared = response.headers.get('content-length');
   if (response.status !== 200 || !response.body || (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > max))) {
     await response.body?.cancel().catch(() => {});
-    throw new Error('Invalid Bilibili response');
+    throw new ProfileReadError(response.status !== 200 ? 'upstream-http-error' : 'invalid-response');
   }
   const reader = response.body.getReader(), decoder = new TextDecoder('utf-8', { fatal: true });
   let bytes = 0, content = '';
@@ -66,16 +86,17 @@ async function boundedResponseJson(response: Response, max: number, signal?: Abo
   signal?.addEventListener('abort', cancel, { once: true });
   try {
     for (;;) {
-      if (signal?.aborted) throw new Error('Bilibili request timed out');
+      if (signal?.aborted) throw new ProfileReadError('timeout');
       const chunk = await reader.read();
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
-      if (bytes > max) throw new Error('Bilibili response too large');
+      if (bytes > max) throw new ProfileReadError('invalid-response');
       content += decoder.decode(chunk.value, { stream: true });
     }
     return JSON.parse(content + decoder.decode()) as unknown;
   } catch (error) {
-    await reader.cancel().catch(() => {}); throw error;
+    await reader.cancel().catch(() => {});
+    throw error instanceof ProfileReadError ? error : new ProfileReadError(signal?.aborted ? 'timeout' : 'invalid-response');
   } finally {
     signal?.removeEventListener('abort', cancel); reader.releaseLock();
   }
@@ -85,7 +106,7 @@ async function fetchProfile(fetcher: BilibiliFetch, now: () => number): Promise<
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { controller.abort(); reject(new Error('Bilibili request timed out')); }, TIMEOUT_MS);
+    timer = setTimeout(() => { controller.abort(); reject(new ProfileReadError('timeout')); }, TIMEOUT_MS);
   });
   try {
     return await Promise.race([deadline, (async () => {
@@ -96,6 +117,8 @@ async function fetchProfile(fetcher: BilibiliFetch, now: () => number): Promise<
       const value = await boundedResponseJson(response, MAX_UPSTREAM_BYTES, controller.signal);
       return publicProfile(value, now());
     })()]);
+  } catch (error) {
+    throw error instanceof ProfileReadError ? error : new ProfileReadError(controller.signal.aborted ? 'timeout' : 'network');
   } finally { clearTimeout(timer); controller.abort(); }
 }
 
@@ -124,22 +147,24 @@ async function saveState(context: PublicReadCache | undefined, key: Request | un
 }
 
 /** Public account information only; no OAuth tokens, cookies or database writes. */
-export async function readBilibiliProfile({ now, cache, fetcher = request => fetch(request) }: ProfileDependencies): Promise<BilibiliProfile> {
+export async function readBilibiliProfile({ now, cache, fetcher = request => fetch(request), fallbackSnapshot = packagedSnapshot }: ProfileDependencies): Promise<BilibiliProfile> {
   const instant = now();
   const key = cache ? publicCacheKey(cache, 'bilibili-profile-v1', 'index', BILIBILI_UID) : undefined;
   const state = await cachedState(cache, key, instant);
   const profile = state?.profile;
   if (profile && instant - Date.parse(profile.updatedAt!) < FRESH_MS) return profile;
-  if (state && instant - state.checkedAt < BACKOFF_MS) return profile ? { ...profile, status: 'stale' } : unavailable();
+  if (state && instant - state.checkedAt < BACKOFF_MS) return profile ? { ...profile, status: 'stale' } : snapshotFallback(fallbackSnapshot, instant);
   try {
     const fresh = await fetchProfile(fetcher, now);
     const checkedAt = Date.parse(fresh.updatedAt!);
     await saveState(cache, key, { profile: fresh, checkedAt }, checkedAt);
     return fresh;
-  } catch {
+  } catch (error) {
+    // Only the bounded classification enters logs, never upstream text or data.
+    console.warn(JSON.stringify({ level: 'warn', code: 'BILIBILI_PUBLIC_PROFILE_UNAVAILABLE', reason: error instanceof ProfileReadError ? error.reason : 'network' }));
     const checkedAt = now();
     const retained = profile && checkedAt - Date.parse(profile.updatedAt!) < RETAIN_MS ? profile : null;
     await saveState(cache, key, { profile: retained, checkedAt }, checkedAt);
-    return retained ? { ...retained, status: 'stale' } : unavailable();
+    return retained ? { ...retained, status: 'stale' } : snapshotFallback(fallbackSnapshot, checkedAt);
   }
 }
