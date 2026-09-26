@@ -5,7 +5,7 @@
   "compatibility_date": "2026-09-12",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
-  "triggers": { "crons": ["0 16 * * *"] },
+  "triggers": { "crons": ["0 16 * * *", "15 */6 * * *"] },
   "observability": { "enabled": true, "head_sampling_rate": 0.1 },
   "r2_buckets": [{ "binding": "CONTENT", "bucket_name": "xvyin-v3-test-private" }],
   "vars": {

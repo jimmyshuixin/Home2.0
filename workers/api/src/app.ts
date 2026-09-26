@@ -18,6 +18,9 @@ import { renderPublic, serveObject, publicIndex } from './render';
 import { AnalyticsQuerySchema, EngagementTargetSchema, LikeInputSchema, VisitInputSchema } from '@xvyin/contracts';
 import { cachedLikeCount, Engagement, guardEngagementRequest } from './engagement';
 import { readBilibiliProfile, type BilibiliFetch } from './bilibili';
+import { BilibiliBinding } from './bilibili-binding';
+import { BilibiliProfileSchema } from '@xvyin/contracts';
+import { cacheRead, cacheWrite } from './public-read-cache';
 export interface Runtime {
   store: Store; bucket: R2Bucket; auth: AuthProvider; now: () => number; secureCookies: boolean;
   allowedOrigins: string[]; privacySalt: string; adminUsername: string; codeSha: string;
@@ -27,6 +30,8 @@ export interface Runtime {
   dispatchMedia?: (assetId: string) => Promise<void>;
   publicReadCache?: PublicReadCache;
   bilibiliFetch?: BilibiliFetch;
+  bilibiliCredentialKey?: string;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }
 interface CommentRecord { id: string; nickname: string; body: string; targetType: 'guestbook' | 'creation' | 'album'; targetId: string | null; status: 'pending' | 'approved' | 'rejected' | 'hidden'; version: number; createdAt: string; updatedAt: string }
 type Context = { Variables: { requestId: string; session: Session; previewId: string | null } };
@@ -40,6 +45,22 @@ export function createApi(runtime: Runtime) {
   const photographyBackfill = new PhotographyBackfill(runtime.store, runtime.bucket, runtime.now);
   const library = new MediaLibrary(runtime.store, runtime.bucket, runtime.now);
   const engagement = new Engagement(runtime.store, runtime.privacySalt, runtime.now);
+  const bilibili = new BilibiliBinding(runtime.store, runtime.now, { credentialKey: runtime.bilibiliCredentialKey, fetcher: runtime.bilibiliFetch });
+  const boundBilibiliProfile = async () => {
+    if (!runtime.bilibiliCredentialKey) return null;
+    const cache = runtime.publicReadCache;
+    const key = cache ? new Request(new URL('/__xvyin_edge/bilibili-bound-profile/v1', cache.origin)) : null;
+    try {
+      if (cache && key) {
+        const cached = await cacheRead(cache, key);
+        if (cached) { const body = await cached.json() as { profile: unknown }; return body.profile === null ? null : BilibiliProfileSchema.parse(body.profile); }
+      }
+      const value = await bilibili.publicData();
+      const profile = value?.profile ? BilibiliProfileSchema.parse({ ...value.profile, works: value.works, worksUpdatedAt: value.worksUpdatedAt }) : null;
+      if (cache && key) await cacheWrite(cache, key, Response.json({ profile }, { headers: { 'cache-control': 'public, max-age=60' } }));
+      return profile;
+    } catch { return null; /* Published fallback remains available during private-store outages. */ }
+  };
   const publicPurge = ({ keys, ...job }: PurgeJob) => ({ ...job, totalKeys: keys.length });
   const response = (data: unknown, requestId: string, extra: Record<string, unknown> = {}, status = 200) => new Response(JSON.stringify({ data, meta: { requestId, schemaVersion: 1, ...extra } }), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
   const input = async (request: Request, max?: number) => { const value = await boundedJson(request, max); const problem = boundedTreeProblem(value, 24, 15000); assert(!problem, 'INVALID_CONTENT_TREE', 422, problem || '内容结构无效'); return value; };
@@ -91,7 +112,7 @@ export function createApi(runtime: Runtime) {
   });
   app.get('/api/v1/health', c => response({ status: 'ok', schemaVersion: 1 }, c.get('requestId')));
   app.get('/api/v1/time', c => response({ now: new Date(runtime.now()).toISOString(), todayDate: shanghaiDate(runtime.now()), timezone: 'Asia/Shanghai' }, c.get('requestId')));
-  app.get('/api/v1/bilibili/profile', async c => response(await readBilibiliProfile({ now: runtime.now, cache: runtime.publicReadCache, fetcher: runtime.bilibiliFetch }), c.get('requestId')));
+  app.get('/api/v1/bilibili/profile', async c => response(await boundBilibiliProfile() ?? await readBilibiliProfile({ now: runtime.now, cache: runtime.publicReadCache, fetcher: runtime.bilibiliFetch }), c.get('requestId')));
   app.post('/api/v1/auth/login', async c => {
     await limit(c.req.raw, 'login', 8, 15 * 60_000); const values = loginInput.parse(await input(c.req.raw, 4096));
     const identity = await runtime.auth.signIn(values), created = await sessions.create(identity);
@@ -108,6 +129,23 @@ export function createApi(runtime: Runtime) {
   app.post('/api/v1/auth/reset/request', async c => { await limit(c.req.raw, 'password-reset', 3, 3600_000); const values = z.object({ username: z.string().min(1).max(128) }).strict().parse(await input(c.req.raw, 4096)); await runtime.auth.requestPasswordReset(values); return response({ accepted: true }, c.get('requestId')); });
   app.post('/api/v1/auth/reset/confirm', async c => { await limit(c.req.raw, 'reset-confirm', 6, 15 * 60_000); const values = z.object({ code: z.string().min(1).max(4096), newPassword: z.string().max(512) }).strict().parse(await input(c.req.raw, 8192)); const result = await runtime.auth.confirmPasswordReset(values); await sessions.revokeAll(result.uid); return response({ changed: true }, c.get('requestId')); });
   app.use('/api/v1/admin/*', async (c, next) => { c.set('session', await sessions.require(c.req.raw, !['GET', 'HEAD'].includes(c.req.method))); await next(); });
+  app.get('/api/v1/admin/bilibili', async c => response(await bilibili.adminStatus(), c.get('requestId')));
+  app.post('/api/v1/admin/bilibili/qr', async c => {
+    await limit(c.req.raw, 'bilibili-qr', 5, 10 * 60_000);
+    return response(await bilibili.startQr(c.get('session').id), c.get('requestId'));
+  });
+  app.post('/api/v1/admin/bilibili/qr/:transactionId/poll', async c => {
+    await limit(c.req.raw, 'bilibili-poll', 40);
+    const transactionId = z.string().uuid().parse(c.req.param('transactionId'));
+    const polled = await bilibili.pollQr(c.get('session').id, transactionId);
+    if (polled.state === 'bound' && runtime.waitUntil) runtime.waitUntil(bilibili.sync(false));
+    return response(polled, c.get('requestId'));
+  });
+  app.post('/api/v1/admin/bilibili/sync', async c => {
+    await limit(c.req.raw, 'bilibili-sync', 2, 5 * 60_000);
+    return response(await bilibili.sync(), c.get('requestId'));
+  });
+  app.post('/api/v1/admin/bilibili/unlink', async c => response(await bilibili.unlink(), c.get('requestId')));
   for (const collection of ['creations', 'albums', 'fitness', 'playlists']) {
     app.get(`/api/v1/admin/${collection}`, async c => { const page = await runtime.store.list<DraftRecord>(collection, { limit: 50, cursor: c.req.query('cursor') }); return response(await publicRecordState(collection, page.items.map(item => item.data)), c.get('requestId'), { nextCursor: page.nextCursor }); });
     app.get(`/api/v1/admin/${collection}/:id`, async c => { IdSchema.parse(c.req.param('id')); const value = await runtime.store.get<DraftRecord>(`${collection}/${c.req.param('id')}`); assert(value, 'NOT_FOUND', 404, '内容不存在'); return response((await publicRecordState(collection, [value]))[0], c.get('requestId')); });

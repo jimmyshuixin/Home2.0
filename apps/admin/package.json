@@ -3,6 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "vite --host 127.0.0.1 --port 5174", "build": "vite build", "typecheck": "vue-tsc --noEmit -p tsconfig.json" },
-  "dependencies": { "@xvyin/contracts": "*", "@noble/hashes": "^2.0.1", "vue": "3.5.40", "vue-router": "5.2.0" }
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174",
+    "build": "vite build",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.0.1",
+    "@xvyin/contracts": "*",
+    "qrcode": "^1.5.4",
+    "vue": "3.5.40",
+    "vue-router": "5.2.0"
+  }
 }

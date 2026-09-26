@@ -16,6 +16,22 @@ export function isBilibiliAvatarUrl(value: string): boolean {
 }
 
 const publicCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
+export function isBilibiliCoverUrl(value: string): boolean {
+  if (value.length > 512 || /[\s\\\u0000-\u001f\u007f]/u.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && /^i[012]\.hdslb\.com$/u.test(url.hostname)
+      && !url.username && !url.password && !url.port && !url.search && !url.hash
+      && /^\/bfs\/(?:archive|storyff)\/[a-zA-Z0-9_/-]+\.(?:jpe?g|png|webp)$/iu.test(url.pathname);
+  } catch { return false; }
+}
+export const BilibiliWorkSchema = z.object({
+  bvid: z.string().regex(/^BV[1-9A-HJ-NP-Za-km-z]{10}$/u), title: plainText(200, 1),
+  url: z.string().regex(/^https:\/\/www\.bilibili\.com\/video\/BV[1-9A-HJ-NP-Za-km-z]{10}\/$/u),
+  coverUrl: z.string().refine(isBilibiliCoverUrl).nullable(), publishedAt: UtcTimestampSchema.nullable(),
+  views: publicCount, durationSeconds: publicCount,
+}).strict();
+export type BilibiliWork = z.infer<typeof BilibiliWorkSchema>;
 export const BilibiliProfileSchema = z.object({
   uid: z.literal(BILIBILI_UID),
   profileUrl: z.literal(BILIBILI_PROFILE_URL),
@@ -29,6 +45,8 @@ export const BilibiliProfileSchema = z.object({
   status: z.enum(['fresh', 'stale', 'snapshot', 'unavailable']),
   // A fixed public UID association is not proof of an OAuth authorization.
   authorization: z.literal('public'),
+  works: z.array(BilibiliWorkSchema).max(12).optional(),
+  worksUpdatedAt: UtcTimestampSchema.nullable().optional(),
 }).strict().superRefine((profile, context) => {
   if (profile.status === 'unavailable') {
     if ([profile.name, profile.signature, profile.avatarUrl, profile.followers, profile.videoCount, profile.likes, profile.updatedAt].some(value => value !== null)) {
@@ -39,3 +57,11 @@ export const BilibiliProfileSchema = z.object({
   }
 });
 export type BilibiliProfile = z.infer<typeof BilibiliProfileSchema>;
+
+export interface BilibiliBindingStatus {
+  configured: boolean; uid: typeof BILIBILI_UID; state: 'unbound' | 'bound' | 'expired';
+  linkedAt: string | null; credentialsExpireAt: string | null; lastSyncAt: string | null; lastAttemptAt: string | null;
+  lastError: string | null; profile: BilibiliProfile | null; works: BilibiliWork[]; worksUpdatedAt: string | null;
+}
+export interface BilibiliQrStart { transactionId: string; qrUrl: string; expiresAt: string; pollAfterMs: number }
+export interface BilibiliQrPoll { state: 'waiting' | 'scanned' | 'bound' | 'expired' | 'rejected'; binding?: BilibiliBindingStatus }

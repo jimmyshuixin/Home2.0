@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const finished = useState<boolean>('site-entrance-finished', () => false)
-const entrance = ref<HTMLElement | null>(null)
+const entrance = shallowRef<HTMLElement | null>(null)
 let fallback: ReturnType<typeof setTimeout> | undefined
 let reducedMotion: MediaQueryList | undefined
 

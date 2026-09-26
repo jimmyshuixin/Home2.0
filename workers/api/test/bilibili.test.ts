@@ -43,7 +43,7 @@ describe('fixed public Bilibili profile', () => {
     expect(BilibiliProfileSchema.safeParse(profile).success).toBe(true);
     const request = fetcher.mock.calls[0]![0];
     expect(request.url).toBe('https://api.bilibili.com/x/web-interface/card?mid=520237303');
-    expect(request.method).toBe('GET'); expect(request.redirect).toBe('error');
+    expect(request.method).toBe('GET'); expect(request.redirect).toBe('manual');
     expect([...request.headers.entries()]).toEqual([['accept', 'application/json']]);
   });
 

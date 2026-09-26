@@ -60,7 +60,7 @@ function avatar(value: unknown): string | null {
   return isBilibiliAvatarUrl(candidate) ? candidate : null;
 }
 
-function publicProfile(value: unknown, now: number): BilibiliProfile {
+export function sanitizeBilibiliProfile(value: unknown, now: number): BilibiliProfile {
   const root = record(value), data = record(root?.data), card = record(data?.card);
   if (root && typeof root.code === 'number' && root.code !== 0) throw new ProfileReadError('upstream-unavailable');
   if (root?.code !== 0 || !card || String(card.mid) !== BILIBILI_UID) throw new ProfileReadError('invalid-response');
@@ -112,10 +112,10 @@ async function fetchProfile(fetcher: BilibiliFetch, now: () => number): Promise<
     return await Promise.race([deadline, (async () => {
       // Build a fresh fixed-host request. Visitor cookies, query parameters,
       // authorization headers and IP addresses never reach Bilibili.
-      const request = new Request(UPSTREAM_URL, { method: 'GET', redirect: 'error', signal: controller.signal, headers: { accept: 'application/json' } });
+      const request = new Request(UPSTREAM_URL, { method: 'GET', redirect: 'manual', signal: controller.signal, headers: { accept: 'application/json' } });
       const response = await fetcher(request);
       const value = await boundedResponseJson(response, MAX_UPSTREAM_BYTES, controller.signal);
-      return publicProfile(value, now());
+      return sanitizeBilibiliProfile(value, now());
     })()]);
   } catch (error) {
     throw error instanceof ProfileReadError ? error : new ProfileReadError(controller.signal.aborted ? 'timeout' : 'network');
