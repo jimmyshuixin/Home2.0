@@ -33,7 +33,7 @@ describe('dependency-free public social runner', () => {
       expect(options?.redirect).toBe('manual');
       return new Response(null, { status: 302, headers: { location: 'https://evil.test/' } });
     });
-    await expect(requestJson('https://xvyin.com/api/v1/internal/social-sync', { headers: { authorization: 'Bearer test' } }, 50, redirect)).rejects.toThrow('unavailable');
+    await expect(requestJson('https://xvyin-v3-test.pages.dev/api/v1/internal/social-sync', { headers: { authorization: 'Bearer test' } }, 50, redirect)).rejects.toThrow('unavailable');
     expect(redirect).toHaveBeenCalledTimes(1);
     await expect(requestJson('https://api.github.com/users/jimmyshuixin', {}, 4, async () => new Response('12345'))).rejects.toThrow('invalid-response');
   });
@@ -78,7 +78,7 @@ describe('dependency-free public social runner', () => {
         return String(url).includes('actions.githubusercontent.com') ? json({ value: 'header.payload.signature' }) : json({ data: { accepted: false } });
       });
       expect(urls).toHaveLength(2);
-      expect(urls[1]).toBe('https://xvyin.com/api/v1/internal/social-sync/claim');
+      expect(urls[1]).toBe('https://xvyin-v3-test.pages.dev/api/v1/internal/social-sync/claim');
     } finally { logger.mockRestore(); }
   });
   it('logs only a fixed failure stage and HTTP status without tokens, request URLs or response bodies', async () => {
@@ -100,17 +100,53 @@ describe('dependency-free public social runner', () => {
           expect(authorization).toBe(`Bearer ${requestSecret}`);
           return json({ value: token });
         }
-        expect(String(url)).toBe('https://xvyin.com/api/v1/internal/social-sync/claim');
+        expect(String(url)).toBe('https://xvyin-v3-test.pages.dev/api/v1/internal/social-sync/claim');
         expect(authorization).toBe(`Bearer ${token}`);
         return new Response(responseBody, { status: 403 });
       })).rejects.toThrow('upstream-blocked');
       expect(requestedUrls).toHaveLength(2);
-      expect(loggers[3]!.mock.calls).toEqual([[JSON.stringify({ stage: 'claim', reason: 'upstream-blocked', status: 403 })]]);
+      expect(loggers[3]!.mock.calls).toEqual([[JSON.stringify({ stage: 'claim', reason: 'upstream-blocked', status: 403, diagnostic: { responseType: 'other' } })]]);
       const logged = JSON.stringify(loggers.flatMap(logger => logger.mock.calls));
       for (const forbidden of [requestSecret, token, ...token.split('.'), payloadSecret, responseBody, 'private-response-body-must-never-appear-in-logs', ...requestedUrls]) {
         expect(logged).not.toContain(forbidden);
       }
       expect(logged).not.toMatch(/https?:\/\//u);
+    } finally { for (const logger of loggers) logger.mockRestore(); }
+  });
+  it('exposes only allowlisted site authentication diagnostics and filters malicious error bodies', async () => {
+    const secret = 'private-diagnostic-canary-never-log';
+    const validBody = JSON.stringify({ error: {
+      code: 'SOCIAL_SYNC_UNAUTHORIZED', message: secret,
+      fields: { stage: ['signature'], reason: ['invalid-token'], claim: ['aud'], token: [secret] },
+      requestUrl: `https://private.invalid/${secret}`,
+    } });
+    const cases: Array<{ body: string; diagnostic?: Record<string, string>; atIdentity?: boolean; headers?: Record<string, string> }> = [
+      { body: validBody, diagnostic: { serverCode: 'SOCIAL_SYNC_UNAUTHORIZED', stage: 'signature', reason: 'invalid-token', claim: 'aud' } },
+      { body: JSON.stringify({ error: { code: 'SOCIAL_SYNC_UNAUTHORIZED', message: secret, fields: { stage: [secret], reason: ['mismatch', secret], claim: { aud: secret }, token: [secret] } } }), diagnostic: { serverCode: 'SOCIAL_SYNC_UNAUTHORIZED' } },
+      { body: JSON.stringify({ error: { code: secret, message: secret, fields: { stage: ['signature'], reason: ['invalid-token'], claim: ['aud'] } } }) },
+      { body: validBody.padEnd(4097, ' ') },
+      { body: validBody, atIdentity: true },
+      { body: JSON.stringify({ error: { code: 'ORIGIN_REJECTED', message: secret, fields: { stage: ['signature'], reason: [secret] } } }), diagnostic: { serverCode: 'ORIGIN_REJECTED' } },
+      { body: JSON.stringify({ error: { code: 'RUNNER_UNAUTHORIZED', message: secret, fields: { stage: ['signature'], reason: [secret] } } }), diagnostic: { serverCode: 'RUNNER_UNAUTHORIZED' } },
+      { body: `<html>${secret}</html>`, headers: { 'content-type': 'text/html; charset=utf-8', 'cf-mitigated': 'challenge' }, diagnostic: { responseType: 'html', challenge: 'true' } },
+      { body: validBody, headers: { 'content-type': `application/${secret}`, 'cf-mitigated': secret }, diagnostic: { responseType: 'other' } },
+    ];
+    const loggers = (['log', 'info', 'warn', 'error', 'debug'] as const).map(method => vi.spyOn(console, method).mockImplementation(() => {}));
+    try {
+      for (const sample of cases) {
+        for (const logger of loggers) logger.mockClear();
+        await expect(syncPublicData(environment, async url => {
+          if (!sample.atIdentity && new URL(String(url)).hostname.endsWith('.actions.githubusercontent.com')) return json({ value: 'header.payload.signature' });
+          return new Response(sample.body, { status: 403, headers: sample.headers || { 'content-type': 'application/json' } });
+        })).rejects.toThrow('upstream-blocked');
+        expect(loggers[3]!.mock.calls).toEqual([[JSON.stringify({
+          stage: sample.atIdentity ? 'claim-identity' : 'claim', reason: 'upstream-blocked', status: 403,
+          ...(sample.atIdentity ? {} : { diagnostic: { responseType: 'json', ...sample.diagnostic } }),
+        })]]);
+        const logged = JSON.stringify(loggers.flatMap(logger => logger.mock.calls));
+        for (const forbidden of [secret, sample.body, environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN, 'header.payload.signature']) expect(logged).not.toContain(forbidden);
+        expect(logged).not.toMatch(/https?:\/\//u);
+      }
     } finally { for (const logger of loggers) logger.mockRestore(); }
   });
 });

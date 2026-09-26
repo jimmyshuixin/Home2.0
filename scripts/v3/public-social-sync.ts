@@ -2,8 +2,9 @@
 import { pathToFileURL } from 'node:url';
 import type { BilibiliProfile, GitHubProfile, GitHubRepository, SocialSyncInput } from '@xvyin/contracts';
 
-const ORIGIN = 'https://xvyin.com';
-const AUDIENCE = `${ORIGIN}/public-social-sync`;
+// Existing Pages gateway reaches the same API Worker without the custom domain's browser-only challenge.
+const ORIGIN = 'https://xvyin-v3-test.pages.dev';
+const AUDIENCE = 'https://xvyin.com/public-social-sync';
 const REPOSITORY = 'jimmyshuixin/Home2.0';
 const LOGIN = 'jimmyshuixin';
 const USER_ID = 121843277;
@@ -31,14 +32,21 @@ export async function requestJson(url: string, options: RequestInit = {}, maximu
   catch (error) { throw new SyncError(reason(error)); }
   if (response.status !== 200) {
     const diagnostic: Record<string, string> = {};
+    if (new URL(url).origin === ORIGIN) {
+      diagnostic.responseType = response.headers.get('content-type')?.startsWith('text/html') ? 'html' : response.headers.get('content-type')?.startsWith('application/json') ? 'json' : 'other';
+      if (response.headers.get('cf-mitigated') === 'challenge') diagnostic.challenge = 'true';
+    }
     if (new URL(url).origin === ORIGIN && response.headers.get('content-type')?.startsWith('application/json')) {
       try {
         const parsed = await requestJson(ORIGIN, {}, 4096, async () => new Response(response.body, { status: 200, headers: response.headers }));
         const failure = record(record(parsed.data)?.error), fields = record(failure?.fields);
-        if (failure?.code === 'SOCIAL_SYNC_UNAUTHORIZED') diagnostic.serverCode = 'SOCIAL_SYNC_UNAUTHORIZED';
-        for (const key of ['stage', 'reason']) {
+        if (['ORIGIN_REJECTED', 'RUNNER_UNAUTHORIZED'].includes(String(failure?.code))) diagnostic.serverCode = String(failure?.code);
+        if (failure?.code === 'SOCIAL_SYNC_UNAUTHORIZED') {
+          diagnostic.serverCode = 'SOCIAL_SYNC_UNAUTHORIZED';
+          for (const key of ['stage', 'reason', 'claim']) {
           const value = fields?.[key];
-          if (Array.isArray(value) && value.length === 1 && typeof value[0] === 'string' && ['signature', 'repository', 'source', 'workflow', 'identity', 'claim', 'jwks-fetch', 'timeout', 'no-key', 'invalid-token', 'invalid-key', 'unsupported', 'unknown', 'mismatch'].includes(value[0])) diagnostic[key] = value[0];
+          if (Array.isArray(value) && value.length === 1 && typeof value[0] === 'string' && ['signature', 'repository', 'source', 'workflow', 'identity', 'claim', 'jwks-fetch', 'timeout', 'no-key', 'invalid-token', 'invalid-key', 'unsupported', 'unknown', 'mismatch', 'iss', 'aud', 'nbf', 'iat', 'exp', 'sub'].includes(value[0])) diagnostic[key] = value[0];
+          }
         }
       } catch { /* Never expose an untrusted error body. */ }
     } else await response.body?.cancel();
