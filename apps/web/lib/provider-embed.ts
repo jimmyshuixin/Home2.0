@@ -16,7 +16,8 @@ export function providerEmbed(ref?: ProviderRef): ProviderEmbed | undefined {
     return { provider: 'youtube', label: 'YouTube', src: `https://www.youtube-nocookie.com/embed/${id}?autoplay=0&playsinline=1&rel=0` }
   }
   if (ref.provider === 'douyin' && /^[1-9][0-9]{18,19}$/u.test(id)) {
-    return { provider: 'douyin', label: '抖音', src: `https://open.douyin.com/player/video?vid=${id}&autoplay=0` }
+    // The official mobile player otherwise defaults to a fixed 324 × 720 viewport.
+    return { provider: 'douyin', label: '抖音', src: `https://open.douyin.com/player/video?vid=${id}&autoplay=0&width=100%25&height=100vh` }
   }
   return undefined
 }
