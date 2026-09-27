@@ -39,6 +39,13 @@ describe('public build input boundary', () => {
     expect(publicSnapshot(input).settings).toMatchObject({ heroTitle: 'Hello! I am 虚宁', intro: 'Existing introduction' })
     expect(JSON.stringify(input)).toBe(serialized)
   })
+  it('keeps published platform visibility independent and leaves legacy snapshots immutable', () => {
+    const legacy = empty(), serialized = JSON.stringify(legacy)
+    expect(publicSnapshot(legacy).settings.socialVisibility).toEqual({ bilibili: true, douyin: true, github: true })
+    expect(JSON.stringify(legacy)).toBe(serialized)
+    expect(publicSnapshot({ ...empty(), settings: { socialVisibility: { bilibili: false, douyin: true, github: false } } }).settings.socialVisibility)
+      .toEqual({ bilibili: false, douyin: true, github: false })
+  })
 })
 describe('actual media focus control', () => {
   it('pauses the previous element and never resumes it after the new one ends', () => {

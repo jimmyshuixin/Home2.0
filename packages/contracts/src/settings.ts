@@ -17,6 +17,10 @@ export const DEFAULT_NAVIGATION = [
 ] satisfies z.infer<typeof NavigationItemSchema>[];
 
 export const SocialLinkSchema = z.object({ id: IdSchema, label: plainText(40, 1), url: HttpsUrlSchema }).strict();
+export const SocialVisibilitySchema = z.object({
+  bilibili: z.boolean().default(true), douyin: z.boolean().default(true), github: z.boolean().default(true),
+}).strict();
+export type SocialVisibility = z.infer<typeof SocialVisibilitySchema>;
 const settingsShape = {
   siteTitle: plainText(80, 1).default('虚宁的个人网站'),
   // Read existing V3 records without rewriting immutable published snapshots.
@@ -26,6 +30,7 @@ const settingsShape = {
   about: RichTextDocumentSchema.default({ type: 'doc', content: [] }),
   avatarAssetId: IdSchema.nullable().default(null),
   socialLinks: z.array(SocialLinkSchema).max(20).default([]),
+  socialVisibility: SocialVisibilitySchema.default({ bilibili: true, douyin: true, github: true }),
   navigation: z.array(NavigationItemSchema).max(6).default(DEFAULT_NAVIGATION),
   themePreference: z.enum(['system', 'light', 'dark']).default('system'),
   contactEnabled: z.boolean().default(true),

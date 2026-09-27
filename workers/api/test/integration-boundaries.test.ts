@@ -321,6 +321,32 @@ describe('HTTP authentication, moderation and optimistic updates', () => {
     expect(await store.get('settings/site')).toMatchObject({ version: record.version + 1, draft: { heroTitle: HERO_TITLE } });
   });
 
+  it('defaults old platform settings on read and only changes public visibility after the saved draft is published', async () => {
+    const session = await login();
+    const record = await api.records.save('settings', SiteSettingsSchema, { intro: 'Keep this introduction' }, uid, 'site');
+    const { socialVisibility: ignored, ...oldDraft } = record.draft as Record<string, unknown>;
+    const legacy = { ...record, draft: oldDraft };
+    await store.transaction(async tx => { tx.put('settings/site', legacy); });
+    const loaded = await (await request('/api/v1/admin/settings/site', session)).json() as { data: DraftRecord };
+    const visible = { bilibili: true, douyin: true, github: true };
+    expect(loaded.data).toMatchObject({ version: record.version, draft: { intro: 'Keep this introduction', socialVisibility: visible } });
+    expect(await store.get('settings/site')).toEqual(legacy);
+    const initial = await finishBuild(await api.releases.create({ changes: [{ collection: 'settings', id: 'site', version: record.version, action: 'publish' }], expectedReleaseId: null }, uid));
+    await api.releases.activate(initial.id, null);
+    const before = await (await request('/api/v1/settings')).json() as { data: unknown };
+    expect(before.data).toMatchObject({ socialVisibility: visible });
+    const hidden = { bilibili: false, douyin: true, github: false };
+    const saved = await request('/api/v1/admin/settings/site', session, { method: 'PATCH', body: { draft: { ...oldDraft, socialVisibility: hidden }, expectedVersion: record.version } });
+    expect(saved.status).toBe(200);
+    expect(await store.get('settings/site')).toMatchObject({ version: record.version + 1, draft: { intro: 'Keep this introduction', socialVisibility: hidden } });
+    expect((await (await request('/api/v1/settings')).json() as { data: unknown }).data).toEqual(before.data);
+    const changed = await finishBuild(await api.releases.create({ changes: [{ collection: 'settings', id: 'site', version: record.version + 1, action: 'publish' }], expectedReleaseId: initial.id }, uid));
+    expect((await (await request('/api/v1/settings')).json() as { data: unknown }).data).toEqual(before.data);
+    await api.releases.activate(changed.id, initial.id);
+    expect((await (await request('/api/v1/settings')).json() as { data: unknown }).data).toMatchObject({ intro: 'Keep this introduction', socialVisibility: hidden });
+    expect((await store.list('social_sync')).items).toEqual([]); expect((await store.list('social_public')).items).toEqual([]);
+  });
+
   it('rejects unauthenticated and cross-origin mutations, and enforces CSRF on admin writes', async () => {
     expect((await request('/api/v1/admin/creations')).status).toBe(401);
     const session = await login();
