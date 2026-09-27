@@ -1,0 +1,88 @@
+name: Douyin v5 anonymous feasibility probe
+
+on:
+  push:
+    branches: [codex/douyin-v5-probe-20260927]
+    paths:
+      - .github/workflows/douyin-v5-probe.yml
+      - scripts/v3/douyin-v5-probe.py
+  workflow_dispatch:
+
+permissions: {}
+concurrency:
+  group: douyin-v5-feasibility
+  cancel-in-progress: false
+
+jobs:
+  public-read-only:
+    if: github.repository == 'jimmyshuixin/Home2.0' && github.ref == 'refs/heads/codex/douyin-v5-probe-20260927'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    permissions:
+      contents: read
+    env:
+      DTK_REVISION: d21b92ec28e481795f4c8530ee6dc0f7d40da69d
+      CLOAK_REVISION: f04c23da285b3b3d3cf10c8f9d282e7adc1d52ce
+      CLOAKBROWSER_VERSION: 146.0.7680.177.5
+      CLOAKBROWSER_AUTO_UPDATE: 'false'
+      PYTHONUNBUFFERED: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    steps:
+      - name: Check out this isolated probe revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout: scripts/v3/douyin-v5-probe.py
+          sparse-checkout-cone-mode: false
+
+      - name: Set up a pinned Python package installer
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: '0.12.15'
+          enable-cache: false
+
+      - name: Fetch the reviewed upstream release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          git init "$RUNNER_TEMP/dtk-v5"
+          git -C "$RUNNER_TEMP/dtk-v5" remote add origin https://github.com/Evil0ctal/Douyin_TikTok_Download_API.git
+          git -C "$RUNNER_TEMP/dtk-v5" fetch --depth 1 origin "$DTK_REVISION"
+          git -C "$RUNNER_TEMP/dtk-v5" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/dtk-v5" rev-parse HEAD)" = "$DTK_REVISION"
+          printf 'DTK=%s\nCloakBrowser=%s\nChromium=%s\n' "$DTK_REVISION" "$CLOAK_REVISION" "$CLOAKBROWSER_VERSION" > output/versions.txt
+
+      - name: Install only the probe dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv --python 3.12 "$RUNNER_TEMP/douyin-v5-venv"
+          uv pip install --python "$RUNNER_TEMP/douyin-v5-venv/bin/python" \
+            'wreq==0.12.1' 'pydantic==2.13.5' 'structlog==26.1.0' 'httpx==0.28.1' \
+            "cloakbrowser @ git+https://github.com/CloakHQ/cloakbrowser@$CLOAK_REVISION"
+          uv pip freeze --python "$RUNNER_TEMP/douyin-v5-venv/bin/python" >> output/versions.txt
+          "$RUNNER_TEMP/douyin-v5-venv/bin/python" -m playwright install-deps chromium
+          "$RUNNER_TEMP/douyin-v5-venv/bin/python" -m cloakbrowser install
+
+      - name: Test one guest session and two public API reads
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONPATH="$RUNNER_TEMP/dtk-v5/src:$RUNNER_TEMP/dtk-v5/docker"
+          timeout 240 "$RUNNER_TEMP/douyin-v5-venv/bin/python" scripts/v3/douyin-v5-probe.py
+        # The script strips inherited credentials from its process environment.
+        # No platform login, proxy, site import, website build, or deployment.
+
+      - name: Save only the sanitized public result and dependency versions
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: douyin-v5-public-probe
+          path: |
+            output/douyin-v5-probe.json
+            output/versions.txt
+          if-no-files-found: warn
+          retention-days: 2
