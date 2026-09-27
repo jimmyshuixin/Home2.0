@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { HERO_TITLE, SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, PublishableAlbumSchema, PublishablePlaylistSchema, PublishableFitnessEntrySchema, IdSchema, Sha256Schema, PublicMediaAssetSchema, deriveFormats, fitnessDayCount, type SiteSettings, type FitnessSettingsDraft, type CreationDraft, type AlbumDraft, type FitnessEntryDraft, type PlaylistDraft, type PublicMediaAsset } from '@xvyin/contracts';
+import { HERO_TITLE, SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, PublishableAlbumSchema, PublishablePlaylistSchema, PublishableFitnessEntrySchema, PhotoMapSettingsSchema, PhotoCoordinatesSchema, PublicPhotoLocationSchema, IdSchema, Sha256Schema, PublicMediaAssetSchema, deriveFormats, fitnessDayCount, type SiteSettings, type FitnessSettingsDraft, type CreationDraft, type PublishableAlbum, type FitnessEntryDraft, type PlaylistDraft, type PublicMediaAsset, type PublicPhotoLocation } from '@xvyin/contracts';
 import type { Store } from './store/types';
 import type { DraftRecord } from './records';
 import type { MediaAsset } from './media';
@@ -9,7 +9,7 @@ import { assertMediaFence, availableFence, MEDIA_FENCE_KEY, type MediaFence } fr
 export type Published<T> = T & { id: string; revisionId: string; publishedAt: string };
 export interface Snapshot {
   schemaVersion: 1; releaseId: string; settings: SiteSettings;
-  creations: Array<Published<CreationDraft> & { formats: string[] }>; albums: Array<Published<AlbumDraft>>;
+  creations: Array<Published<CreationDraft> & { formats: string[] }>; albums: Array<Published<PublishableAlbum>>;
   fitness: { settings: FitnessSettingsDraft; entries: Array<Published<FitnessEntryDraft>> };
   playlists: Array<Published<PlaylistDraft>>; assets: PublicMediaAsset[]; routeAliases: Record<string, string>;
 }
@@ -29,7 +29,9 @@ export interface BuildFile { path: string; key: string; sha256: string; bytes: n
 export interface ReleaseManifest { releaseId: string; schemaVersion: 1; files: BuildFile[]; assets: Record<string, { key: string; mime: string; bytes: number; sha256: string }> }
 export interface ManifestPreparation { pending: true; phase: 'assets'; processed: number; total: number }
 const RELEASE_ASSET_BATCH_SIZE = 100;
-interface SnapshotPreparationState { sourceSha256: string; processed: number; assets: PublicMediaAsset[] }
+interface PendingPhotoLocation { albumId: string; photoId: string; assetId: string; label?: string }
+interface SnapshotSource extends Snapshot { pendingPhotoLocations?: PendingPhotoLocation[] }
+interface SnapshotPreparationState { sourceSha256: string; processed: number; assets: PublicMediaAsset[]; locationProcessed?: number; locations?: Record<string, PublicPhotoLocation> }
 interface ManifestPreparationState { inputSha256: string; snapshotSha256: string; processed: number; assets: ReleaseManifest['assets'] }
 export interface ReleaseJob {
   id: string; status: 'queued' | 'building' | 'ready' | 'activating' | 'live' | 'superseded' | 'failed' | 'reconciling';
@@ -42,6 +44,8 @@ export interface ReleaseJob {
   snapshotPrepared?: boolean;
   preparedAssetCount?: number;
   assetCount?: number;
+  preparedLocationCount?: number;
+  locationCount?: number;
   verifiedFileCount?: number;
   verifiedIndexCount?: number;
   indexCount?: number;
@@ -51,7 +55,7 @@ export interface ReleaseJob {
   dispatchState?: 'confirmed' | 'unconfirmed';
 }
 interface ReleaseRequest { inputSha256: string; jobId: string; createdAt: string }
-function publicationDraft<T>(schema: z.ZodType<T>, record: DraftRecord, collection: string): T {
+function publicationDraft<T>(schema: z.ZodType<T>, record: DraftRecord, collection: string, pendingLocations?: PendingPhotoLocation[]): T {
   const draft = record.draft as Record<string, unknown>;
   const section = ({ creations: '创作', albums: '摄影', fitness: '健身', playlists: '歌单' } as Record<string, string>)[collection] || collection;
   const title = typeof draft.title === 'string' && draft.title || typeof draft.name === 'string' && draft.name || '未命名草稿';
@@ -61,7 +65,25 @@ function publicationDraft<T>(schema: z.ZodType<T>, record: DraftRecord, collecti
   // Only photos explicitly selected for this publication belong in the public
   // projection. Incomplete private photos remain safely stored in the draft.
   const input = collection === 'albums' || collection === 'fitness'
-    ? { ...draft, photos: Array.isArray(draft.photos) ? draft.photos.filter(photo => photo?.status === 'published') : draft.photos }
+    ? { ...draft, photos: Array.isArray(draft.photos) ? draft.photos.filter(photo => photo?.status === 'published').map(photo => {
+      if (collection !== 'albums') return photo;
+      // A saved private choice is retained in its immutable content revision. It
+      // never travels to the public snapshot, and old public locations are not inherited.
+      const { map, location: _untrustedLocation, ...publicPhoto } = photo;
+      const settings = PhotoMapSettingsSchema.parse(map || {});
+      if (settings.visibility === 'hidden') return publicPhoto;
+      const label = settings.label?.trim();
+      if (settings.visibility === 'city') {
+        assert(settings.city?.label.trim(), 'PUBLISH_VALIDATION', 422, '请为城市位置填写城市名称，并在地图上选择城市中心');
+        return { ...publicPhoto, location: PublicPhotoLocationSchema.parse({ ...settings.city, precision: 'city' }) };
+      }
+      if (settings.source === 'manual') {
+        assert(settings.coordinates, 'PUBLISH_VALIDATION', 422, '请为手动精确位置选择有效经纬度');
+        return { ...publicPhoto, location: PublicPhotoLocationSchema.parse({ ...settings.coordinates, precision: 'exact', ...(label ? { label } : {}) }) };
+      }
+      pendingLocations?.push({ albumId: record.id, photoId: photo.id, assetId: photo.assetId, ...(label ? { label } : {}) });
+      return publicPhoto;
+    }) : draft.photos }
     : draft;
   const parsed = schema.safeParse(input);
   if (parsed.success) return parsed.data;
@@ -74,6 +96,25 @@ function publicationDraft<T>(schema: z.ZodType<T>, record: DraftRecord, collecti
     (fields[field] ||= []).push(value === '' || value === null || value === undefined ? '发布前请补齐此项' : issue.message);
   }
   throw new ApiError('PUBLISH_VALIDATION', 422, `${section}「${title}」尚未满足发布条件；草稿已保留，请补齐后再生成预览。`, fields);
+}
+function photoLocationKey(item: PendingPhotoLocation): string { return `${item.albumId}/${item.photoId}`; }
+/** Coordinates are public only for the specific photo reference that selected exact EXIF. */
+function resolvePhotoLocations(pending: PendingPhotoLocation[], records: Array<MediaAsset | null>, batchIds: string[]): Record<string, PublicPhotoLocation> {
+  const byId = new Map(batchIds.map((id, index) => [id, records[index]])), locations: Record<string, PublicPhotoLocation> = {};
+  for (const item of pending) {
+    const asset = byId.get(item.assetId);
+    if (asset?.metadata?.kind !== 'image') continue;
+    const gps = PhotoCoordinatesSchema.safeParse((asset.metadata as typeof asset.metadata & { gps?: unknown }).gps);
+    // Missing capture GPS is a normal image state, never a fabricated map point.
+    if (gps.success) locations[photoLocationKey(item)] = PublicPhotoLocationSchema.parse({ ...gps.data, precision: 'exact', ...(item.label ? { label: item.label } : {}) });
+  }
+  return locations;
+}
+function applyPhotoLocations(snapshot: Snapshot, locations: Record<string, PublicPhotoLocation>): void {
+  for (const album of snapshot.albums) for (const photo of album.photos) {
+    const location = locations[`${album.id}/${photo.id}`];
+    if (location) photo.location = location;
+  }
 }
 export const BuildManifestInputSchema = z.object({ files: z.array(z.object({
   path: z.string().regex(/^\/[A-Za-z0-9_\-./%]+$/u).max(500).refine(v => !v.includes('..') && !v.includes('//') && !/%(?:2f|5c|2e|00)/iu.test(v)),
@@ -197,6 +238,7 @@ export class Releases {
     assert(/^[a-f0-9]{40}$/u.test(this.codeSha), 'BUILD_NOT_CONFIGURED', 503, '发布代码版本尚未配置');
     assert(new Set(changes.map(change => `${change.collection}/${change.id}`)).size === changes.length, 'DUPLICATE_CHANGE', 422, '同一内容不能重复出现在发布清单');
     const snapshot = active ? await this.snapshot(active.value.releaseId) : emptySnapshot(id); snapshot.releaseId = id;
+    const pendingPhotoLocations: PendingPhotoLocation[] = [];
     const selectedRevisionIds: Record<string, string> = {};
     const selected = rebuildPublished ? [] : await this.store.getMany<DraftRecord>(changes.map(change => `${change.collection}/${change.id}`));
     for (const [index, change] of changes.entries()) {
@@ -215,7 +257,7 @@ export class Releases {
         if (change.action === 'publish') { const draft = publicationDraft(PublishableCreationSchema, record, change.collection); snapshot.creations.push({ ...draft, ...common, formats: deriveFormats(draft) }); if (old && old.slug !== draft.slug) snapshot.routeAliases[`/creations/${old.slug}`] = `/creations/${draft.slug}`; }
       } else if (change.collection === 'albums') {
         const old = snapshot.albums.find(item => item.id === change.id); snapshot.albums = snapshot.albums.filter(item => item.id !== change.id);
-        if (change.action === 'publish') { const draft = publicationDraft(PublishableAlbumSchema, record, change.collection); snapshot.albums.push({ ...draft, ...common }); if (old && old.slug !== draft.slug) snapshot.routeAliases[`/photography/${old.slug}`] = `/photography/${draft.slug}`; }
+        if (change.action === 'publish') { const draft = publicationDraft(PublishableAlbumSchema, record, change.collection, pendingPhotoLocations); snapshot.albums.push({ ...draft, ...common }); if (old && old.slug !== draft.slug) snapshot.routeAliases[`/photography/${old.slug}`] = `/photography/${draft.slug}`; }
       } else if (change.collection === 'fitness') {
         snapshot.fitness.entries = snapshot.fitness.entries.filter(item => item.id !== change.id);
         if (change.action === 'publish') { const draft = publicationDraft(PublishableFitnessEntrySchema, record, change.collection); snapshot.fitness.entries.push({ ...draft, ...common }); }
@@ -240,11 +282,18 @@ export class Releases {
     const batchIds = freshIds.slice(0, RELEASE_ASSET_BATCH_SIZE);
     const assets = await this.store.getMany<MediaAsset>(batchIds.map(assetId => `media/${assetId}`));
     snapshot.assets.push(...batchIds.map((assetId, index) => rebuildPublished ? refreshedPublishedAsset(assets[index], previousById.get(assetId)!) : publicAsset(assets[index], assetId)));
-    const snapshotPrepared = freshIds.length === batchIds.length;
-    const json = JSON.stringify(snapshot), snapshotSha256 = await sha256(json);
+    applyPhotoLocations(snapshot, resolvePhotoLocations(pendingPhotoLocations, assets, batchIds));
+    const inspected = new Set(batchIds), remainingLocations = pendingPhotoLocations.filter(item => !inspected.has(item.assetId));
+    const snapshotPrepared = freshIds.length === batchIds.length && remainingLocations.length === 0;
+    // This private queue freezes only the selected revision's EXIF choices. It
+    // is removed before SSG/public APIs can access a completed snapshot.
+    const source: SnapshotSource = remainingLocations.length ? { ...snapshot, pendingPhotoLocations: remainingLocations } : snapshot;
+    const json = JSON.stringify(source), snapshotSha256 = await sha256(json);
     assert(new TextEncoder().encode(json).length <= 10 * 1024 * 1024, 'SNAPSHOT_TOO_LARGE', 422, '发布快照超过当前上限，请减少单次公开内容');
-    await immutableJson(this.bucket, `${snapshotPrepared ? 'private-snapshots' : 'private-snapshot-sources'}/${id}.json`, snapshot, 10 * 1024 * 1024);
-    const job: ReleaseJob = { id, status: 'queued', changes, ...(rebuildPublished ? { rebuildPublished } : {}), previousReleaseId: active?.value.releaseId || null, previousEtag: active?.etag || null, authorUid: uid, createdAt: at, updatedAt: at, codeSha: this.codeSha, runId: null, manifestSha256: null, snapshotSha256, selectedRevisionIds, snapshotPrepared, preparedAssetCount: snapshot.assets.length, assetCount: ids.length };
+    await immutableJson(this.bucket, `${snapshotPrepared ? 'private-snapshots' : 'private-snapshot-sources'}/${id}.json`, source, 10 * 1024 * 1024);
+    const locationCount = new Set(pendingPhotoLocations.map(item => item.assetId)).size;
+    const preparedLocationCount = locationCount - new Set(remainingLocations.map(item => item.assetId)).size;
+    const job: ReleaseJob = { id, status: 'queued', changes, ...(rebuildPublished ? { rebuildPublished } : {}), previousReleaseId: active?.value.releaseId || null, previousEtag: active?.etag || null, authorUid: uid, createdAt: at, updatedAt: at, codeSha: this.codeSha, runId: null, manifestSha256: null, snapshotSha256, selectedRevisionIds, snapshotPrepared, preparedAssetCount: snapshot.assets.length, assetCount: ids.length, ...(locationCount ? { locationCount, preparedLocationCount } : {}) };
     return this.store.transaction(async tx => { const existing = await tx.get<ReleaseJob>(`releases/${id}`); if (existing) return existing; await assertMediaFence(tx, this.now(), mediaEpoch); tx.put(`releases/${id}`, job); return job; });
   }
   async retryDispatchJob(id: string): Promise<ReleaseJob> {
@@ -274,23 +323,37 @@ export class Releases {
     assert(source && source.size <= 10 * 1024 * 1024, 'RELEASE_NOT_FOUND', 404, '冻结的候选来源不存在');
     const sourceJson = await source.text();
     assert(await sha256(sourceJson) === job.snapshotSha256, 'RELEASE_INTEGRITY', 503, '冻结的候选来源校验失败');
-    const snapshot = JSON.parse(sourceJson) as Snapshot, known = new Set(snapshot.assets.map(asset => asset.id));
+    const { pendingPhotoLocations = [], ...snapshot } = JSON.parse(sourceJson) as SnapshotSource;
+    const known = new Set(snapshot.assets.map(asset => asset.id));
     const previous = job.rebuildPublished && job.previousReleaseId ? await this.snapshot(job.previousReleaseId) : null;
     assert(!job.rebuildPublished || previous, 'RELEASE_INTEGRITY', 503, '重建缺少原公开快照');
     const previousById = new Map(previous?.assets.map(asset => [asset.id, asset]) || []);
     const remainingIds = (previous ? previous.assets.map(asset => asset.id) : [...collectAssetIds(snapshot)]).filter(assetId => !known.has(assetId));
+    const mediaPending = new Set(remainingIds);
+    // Existing public assets are normally reused without a read. A new exact
+    // EXIF choice still needs a bounded private read for that specific photo.
+    const remainingLocationIds = [...new Set(pendingPhotoLocations.map(item => item.assetId))].filter(assetId => !mediaPending.has(assetId));
+    const allowedLocationKeys = new Set(pendingPhotoLocations.map(photoLocationKey));
     const key = `private-snapshot-preparation/${id}.json`, current = await this.bucket.get(key);
     assert(!current || current.size <= 10 * 1024 * 1024, 'RELEASE_INVALID', 503, '候选准备进度无效');
     let progress: SnapshotPreparationState = current ? await current.json<SnapshotPreparationState>() : { sourceSha256: job.snapshotSha256, processed: 0, assets: [] };
     const validate = () => assert(progress.sourceSha256 === job.snapshotSha256 && Number.isInteger(progress.processed)
       && progress.processed >= 0 && progress.processed <= remainingIds.length && progress.assets.length === progress.processed
-      && progress.assets.every((asset, index) => asset.id === remainingIds[index]), 'RELEASE_INTEGRITY', 503, '候选准备进度与来源不符');
+      && progress.assets.every((asset, index) => asset.id === remainingIds[index])
+      && Number.isInteger(progress.locationProcessed || 0) && (progress.locationProcessed || 0) >= 0 && (progress.locationProcessed || 0) <= remainingLocationIds.length
+      && Object.entries(progress.locations || {}).every(([key, value]) => allowedLocationKeys.has(key) && PublicPhotoLocationSchema.safeParse(value).success), 'RELEASE_INTEGRITY', 503, '候选准备进度与来源不符');
     validate();
-    if (progress.processed < remainingIds.length) {
-      const batchIds = remainingIds.slice(progress.processed, progress.processed + RELEASE_ASSET_BATCH_SIZE);
+    if (progress.processed < remainingIds.length || (progress.locationProcessed || 0) < remainingLocationIds.length) {
+      const preparingAssets = progress.processed < remainingIds.length;
+      const batchIds = preparingAssets ? remainingIds.slice(progress.processed, progress.processed + RELEASE_ASSET_BATCH_SIZE)
+        : remainingLocationIds.slice(progress.locationProcessed || 0, (progress.locationProcessed || 0) + RELEASE_ASSET_BATCH_SIZE);
       const records = await this.store.getMany<MediaAsset>(batchIds.map(assetId => `media/${assetId}`));
-      const next: SnapshotPreparationState = { ...progress, processed: progress.processed + batchIds.length,
-        assets: [...progress.assets, ...batchIds.map((assetId, index) => previous ? refreshedPublishedAsset(records[index], previousById.get(assetId)!) : publicAsset(records[index], assetId))] };
+      const publicAssets = batchIds.map((assetId, index) => previous ? refreshedPublishedAsset(records[index], previousById.get(assetId)!) : publicAsset(records[index], assetId));
+      const locations = resolvePhotoLocations(pendingPhotoLocations, records, batchIds);
+      const next: SnapshotPreparationState = { ...progress,
+        processed: progress.processed + (preparingAssets ? batchIds.length : 0),
+        assets: preparingAssets ? [...progress.assets, ...publicAssets] : progress.assets,
+        ...(pendingPhotoLocations.length ? { locations: { ...progress.locations, ...locations }, locationProcessed: (progress.locationProcessed || 0) + (preparingAssets ? 0 : batchIds.length) } : {}) };
       const serialized = JSON.stringify(next);
       assert(new TextEncoder().encode(serialized).length <= 10 * 1024 * 1024, 'RELEASE_TOO_LARGE', 422, '候选资产投影超过文档大小上限');
       const updated = await this.bucket.put(key, serialized, { onlyIf: current ? { etagMatches: current.etag } : { etagDoesNotMatch: '*' } });
@@ -301,10 +364,15 @@ export class Releases {
         progress = await winner.json<SnapshotPreparationState>(); validate();
       }
     }
-    const preparedAssetCount = snapshot.assets.length + progress.processed, complete = progress.processed === remainingIds.length;
+    const preparedAssetCount = snapshot.assets.length + progress.processed,
+      complete = progress.processed === remainingIds.length && (progress.locationProcessed || 0) === remainingLocationIds.length;
+    const pendingLocationAssets = new Set(pendingPhotoLocations.map(item => item.assetId));
+    const resolvedAssets = [...remainingIds.slice(0, progress.processed), ...remainingLocationIds.slice(0, progress.locationProcessed || 0)];
+    const preparedLocationCount = (job.locationCount || 0) - pendingLocationAssets.size + resolvedAssets.filter(assetId => pendingLocationAssets.has(assetId)).length;
     let snapshotSha256 = job.snapshotSha256;
     if (complete) {
       snapshot.assets.push(...progress.assets);
+      applyPhotoLocations(snapshot, progress.locations || {});
       const json = await immutableJson(this.bucket, `private-snapshots/${id}.json`, snapshot, 10 * 1024 * 1024);
       snapshotSha256 = await sha256(json);
     }
@@ -312,7 +380,7 @@ export class Releases {
       const latest = await tx.get<ReleaseJob>(`releases/${id}`);
       assert(latest?.status === 'building' && latest.runId === runId, 'BUILD_STATE_CONFLICT', 409, '构建任务状态已改变');
       if (latest.snapshotPrepared !== false) return latest;
-      const next: ReleaseJob = { ...latest, snapshotPrepared: complete, preparedAssetCount: Math.max(latest.preparedAssetCount || 0, preparedAssetCount), snapshotSha256, updatedAt: new Date(this.now()).toISOString() };
+      const next: ReleaseJob = { ...latest, snapshotPrepared: complete, preparedAssetCount: Math.max(latest.preparedAssetCount || 0, preparedAssetCount), ...(job.locationCount ? { preparedLocationCount: Math.max(latest.preparedLocationCount || 0, preparedLocationCount) } : {}), snapshotSha256, updatedAt: new Date(this.now()).toISOString() };
       tx.put(`releases/${id}`, next); return next;
     });
   }

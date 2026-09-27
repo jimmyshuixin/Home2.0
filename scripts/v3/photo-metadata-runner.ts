@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import sharp from 'sharp';
 import { z } from 'zod';
-import { IdSchema, ImageMimeSchema, MEDIA_LIMITS, PhotographyMetadataSchema, Sha256Schema } from '@xvyin/contracts';
-import { extractPhotographyMetadata } from './photo-metadata';
+import { IdSchema, ImageMimeSchema, MEDIA_LIMITS, PHOTO_METADATA_EXTRACTOR_VERSION, Sha256Schema } from '@xvyin/contracts';
+import { extractPhotoMetadata } from './photo-metadata';
 import { createRunnerTransport, PublishError, readCredentials, validateOrigin } from './publish';
 
 const PREFIX = '/api/v1/internal/photography';
@@ -77,8 +77,7 @@ async function extractSource(path: string, item: Item) {
   const format = ({ 'image/jpeg': 'jpeg', 'image/png': 'png', 'image/webp': 'webp' } as const)[item.mime];
   check(details.format === format, 'SOURCE_TYPE_MISMATCH');
   check(details.width && details.height && details.width * details.height <= MEDIA_LIMITS.imagePixels, 'SOURCE_PIXEL_LIMIT');
-  const photography = extractPhotographyMetadata(details.exif);
-  return photography ? PhotographyMetadataSchema.parse(photography) : null;
+  return extractPhotoMetadata(details);
 }
 export interface PhotographyRunnerOptions {
   client: PhotographyRunnerClient; privateRoot?: string; maxScanned?: number;
@@ -114,8 +113,8 @@ export async function runPhotographyBackfill(options: PhotographyRunnerOptions):
         let result: PhotographyResult;
         try {
           await downloadSource(options.client, item, sourcePath);
-          const photography = await extractSource(sourcePath, item);
-          const completed = CompleteSchema.parse(await api(options.client, `${PREFIX}/${item.id}/complete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sha256: item.sha256, photography }) }));
+          const metadata = await extractSource(sourcePath, item);
+          const completed = CompleteSchema.parse(await api(options.client, `${PREFIX}/${item.id}/complete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sha256: item.sha256, extractorVersion: PHOTO_METADATA_EXTRACTOR_VERSION, photography: metadata.photography || null, ...(metadata.gps ? { gps: metadata.gps } : {}) }) }));
           report[completed.status]++; result = { assetId: item.id, status: completed.status };
           if (completed.status === 'already_done') report.skipped++;
         } catch (error) {
@@ -137,7 +136,7 @@ export async function runPhotographyBackfill(options: PhotographyRunnerOptions):
 }
 export async function photographyRunnerCli(args = process.argv.slice(2)): Promise<void> {
   const { values } = parseArgs({ args, options: { origin: { type: 'string' }, 'auth-file': { type: 'string' }, help: { type: 'boolean' } }, strict: true });
-  if (values.help) { process.stdout.write('读取原片 EXIF 并回填摄影信息（不会压缩或发布）：\nnode --import tsx scripts/v3/photo-metadata-runner.ts --origin https://xvyin.com [--auth-file <私密管理员会话JSON>]\nGitHub Actions 使用 OIDC；单次最多扫描 10000 条媒体记录。\n'); return; }
+  if (values.help) { process.stdout.write('读取原片 EXIF / XMP 并回填摄影信息（不会压缩或发布）：\nnode --import tsx scripts/v3/photo-metadata-runner.ts --origin https://xvyin.com [--auth-file <私密管理员会话JSON>]\nGitHub Actions 使用 OIDC；单次最多扫描 10000 条媒体记录。\n'); return; }
   check(values.origin, 'INVALID_ARGUMENTS'); const origin = validateOrigin(values.origin), mode = values['auth-file'] ? 'local' : 'github';
   check(mode === 'local' || process.env.GITHUB_ACTIONS === 'true' && /^\d+$/u.test(process.env.GITHUB_RUN_ID || ''), 'AUTH_REQUIRED');
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');

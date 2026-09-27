@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import sharp from 'sharp'
-import { extractPhotographyMetadata } from './photo-metadata'
+import { extractPhotoMetadata } from './photo-metadata'
 import { z } from 'zod'
 import { UploadMetadataSchema, DetectedMediaMetadataSchema, PublicMediaVariantSchema, MEDIA_LIMITS, type UploadMetadata, type DetectedMediaMetadata, type MediaVariantRoleSchema, type AllowedMimeSchema } from '@xvyin/contracts'
 
@@ -148,8 +148,8 @@ export async function processMedia(inputPath: string, declaration: UploadMetadat
         const info = await sharp(staged, { limitInputPixels: MEDIA_LIMITS.imagePixels, failOn: 'error', sequentialRead: true }).rotate().resize({ width: size, height: size, fit: 'inside', withoutEnlargement: true }).webp({ quality: role === 'thumb' ? 80 : 85, effort: 4 }).timeout({ seconds: 120 }).toFile(path)
         variants.push(await variant(path, role, 'image/webp', { width: info.width, height: info.height }))
       }
-      const photography = extractPhotographyMetadata(details.exif), rotated = (details.orientation || 1) >= 5
-      metadata = DetectedMediaMetadataSchema.parse({ ...base, width: rotated ? details.height : details.width, height: rotated ? details.width : details.height, ...(photography ? { photography } : {}) })
+      const photoMetadata = extractPhotoMetadata(details), rotated = (details.orientation || 1) >= 5
+      metadata = DetectedMediaMetadataSchema.parse({ ...base, width: rotated ? details.height : details.width, height: rotated ? details.width : details.height, ...photoMetadata })
     } else if (declared.kind === 'audio' || declared.kind === 'video') {
       const info = await probe(staged), durationMs = duration(info)
       const visual = info.streams.filter((stream) => stream.codec_type === 'video' && !stream.disposition?.attached_pic)

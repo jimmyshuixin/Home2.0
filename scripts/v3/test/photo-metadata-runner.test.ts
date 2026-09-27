@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import sharp from 'sharp';
-import type { PhotographyMetadata } from '@xvyin/contracts';
+import type { PhotographyMetadata, PhotoCoordinates } from '@xvyin/contracts';
 import { photographyRunnerCli, runPhotographyBackfill, type PhotographyRunnerClient } from '../photo-metadata-runner';
 
 const prefix = '/api/v1/internal/photography';
@@ -24,7 +24,7 @@ async function fixture(id: string, format: 'jpeg' | 'png' | 'webp' = 'jpeg', exi
   return { id, bytes: original.length, mime: `image/${format}`, sha256: hash(original), sourceUrl: `${prefix}/${id}/source`, original };
 }
 function remote(items: Fixture[], options: { failSource?: Set<string>; failComplete?: Set<string>; alreadyDone?: Set<string>; pages?: Array<{ items: Fixture[]; scanned: number; nextCursor: string | null }> } = {}) {
-  const posted = new Map<string, { sha256: string; photography: PhotographyMetadata | null }>(), requests: Array<{ path: string; method: string }> = [];
+  const posted = new Map<string, { sha256: string; extractorVersion: number; photography: PhotographyMetadata | null; gps?: PhotoCoordinates }>(), requests: Array<{ path: string; method: string }> = [];
   let page = 0, active = 0, maxActive = 0;
   const client: PhotographyRunnerClient = { async request(path, init = {}) {
     requests.push({ path, method: init.method || 'GET' }); active++; maxActive = Math.max(maxActive, active);
@@ -44,7 +44,7 @@ function remote(items: Fixture[], options: { failSource?: Set<string>; failCompl
       expect(init.method).toBe('POST');
       if (options.failComplete?.has(found.id)) return Response.json({ error: { code: 'SOURCE_CHANGED', message: 'PRIVATE filename.jpg' } }, { status: 409 });
       const body = JSON.parse(String(init.body)); posted.set(found.id, body);
-      return Response.json({ data: { status: options.alreadyDone?.has(found.id) ? 'already_done' : body.photography ? 'updated' : 'no_exif' } });
+      return Response.json({ data: { status: options.alreadyDone?.has(found.id) ? 'already_done' : body.photography || body.gps ? 'updated' : 'no_exif' } });
     } finally { active--; }
   } };
   return { client, posted, requests, maxActive: () => maxActive };
@@ -62,7 +62,7 @@ describe('photography backfill with real JPEG, PNG and WebP EXIF', () => {
     const report = await runPhotographyBackfill({ client: service.client, privateRoot });
     expect(report).toMatchObject({ status: 'complete', scanned: 3, attempted: 3, updated: 3, failed: 0 });
     for (const item of items) {
-      expect(service.posted.get(item.id)).toEqual({ sha256: item.sha256, photography: { cameraMake: 'Sony', cameraModel: 'ILCE-7RM5', lensModel: 'FE 85mm F1.8', focalLengthMm: 85, exposureSeconds: 1 / 250, aperture: 2.8, iso: 400, takenAt: '2024-02-29T23:59:58', takenDate: '2024-02-29' } });
+      expect(service.posted.get(item.id)).toEqual({ sha256: item.sha256, extractorVersion: 2, photography: { cameraMake: 'Sony', cameraModel: 'ILCE-7RM5', lensModel: 'FE 85mm F1.8', focalLengthMm: 85, exposureSeconds: 1 / 250, aperture: 2.8, iso: 400, takenAt: '2024-02-29T23:59:58', takenDate: '2024-02-29' } });
     }
     expect(items.map(item => hash(item.original))).toEqual(before); expect(service.maxActive()).toBe(1);
     expect(service.requests.every(request => request.path === prefix || request.path.endsWith('/source') || request.path.endsWith('/complete'))).toBe(true);
@@ -76,6 +76,17 @@ describe('photography backfill with real JPEG, PNG and WebP EXIF', () => {
     expect(service.posted.get('stripped')?.photography).toBeNull();
     expect(service.posted.get('bad-clock')?.photography).toMatchObject({ cameraMake: 'Sony' });
     expect(service.posted.get('bad-clock')?.photography?.takenDate).toBeUndefined();
+  });
+  it('rescans XMP-only Photoshop PNG headers and keeps coordinates out of reports/logs', async () => {
+    const item = await fixture('photoshop', 'png', false);
+    const xmp = '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" tiff:Make="Canon" tiff:Model="Canon EOS R6m2" exif:ExposureTime="30/1" exif:GPSLatitude="31,12.0000N" exif:GPSLongitude="121,30.0000E"><exif:ISOSpeedRatings><rdf:Seq><rdf:li>100</rdf:li></rdf:Seq></exif:ISOSpeedRatings></rdf:Description></rdf:RDF></x:xmpmeta>';
+    item.original = await sharp(item.original).withXmp(xmp).png().toBuffer(); item.bytes = item.original.length; item.sha256 = hash(item.original);
+    const originalHash = hash(item.original), service = remote([item]), events: unknown[] = [], privateRoot = resolve(root, 'xmp-only');
+    const report = await runPhotographyBackfill({ client: service.client, privateRoot, log: event => events.push(event) });
+    expect(service.posted.get(item.id)).toEqual({ sha256: item.sha256, extractorVersion: 2, photography: { cameraMake: 'Canon', cameraModel: 'Canon EOS R6m2', exposureSeconds: 30, iso: 100 }, gps: { latitude: 31.2, longitude: 121.5 } });
+    expect(report).toMatchObject({ status: 'complete', updated: 1, no_exif: 0 });
+    expect(JSON.stringify(events)).not.toMatch(/latitude|longitude|31\.2|121\.5|Canon/iu);
+    expect(await diskReport(privateRoot)).toEqual(report); expect(hash(item.original)).toBe(originalHash);
   });
   it('continues after corrupt/hash/size/type/network/API failures and saves only sanitized evidence', async () => {
     const items = await Promise.all(['corrupt', 'hash-bad', 'short', 'oversize', 'type-bad', 'network-bad', 'conflict', 'valid'].map(id => fixture(id)));

@@ -41,6 +41,19 @@ describe('real media processing', () => {
     expect(JSON.stringify(result.metadata)).not.toContain('PRIVATE')
     for (const item of result.variants) expect((await sharp(item.path).metadata()).exif).toBeUndefined()
   })
+  it('processes Photoshop-style XMP-only PNG and keeps GPS private while stripping every derivative', async () => {
+    const input = resolve(root, 'photoshop-xmp.png')
+    // Synthetic pixels and metadata structure; the reported private photograph is never a fixture.
+    const xmp = '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:exifEX="http://cipa.jp/exif/1.0/" tiff:Make="Canon" tiff:Model="Canon EOS R6m2" exifEX:LensModel="RF45mm F1.2 STM" exif:ExposureTime="30/1" exif:FNumber="16/1" exif:FocalLength="45/1" exif:DateTimeOriginal="2026-09-27T19:21:19.11+08:00" exif:GPSLatitude="31,12N" exif:GPSLongitude="121,30E"><exif:ISOSpeedRatings><rdf:Seq><rdf:li>100</rdf:li></rdf:Seq></exif:ISOSpeedRatings></rdf:Description></rdf:RDF></x:xmpmeta>'
+    await sharp({ create: { width: 80, height: 60, channels: 3, background: '#345344' } }).withXmp(xmp).png().toFile(input)
+    const sourceHash = await hashFile(input), details = await sharp(input).metadata()
+    expect(details.exif).toBeUndefined(); expect(details.xmp).toBeDefined()
+    const result = await processMedia(input, await declaration(input, 'image', 'image/png'), resolve(root, 'photoshop-output'))
+    expect(result.metadata).toMatchObject({ kind: 'image', photography: { cameraMake: 'Canon', cameraModel: 'Canon EOS R6m2', lensModel: 'RF45mm F1.2 STM', exposureSeconds: 30, aperture: 16, focalLengthMm: 45, iso: 100, takenAt: '2026-09-27T19:21:19', takenDate: '2026-09-27', timezoneOffset: '+08:00' }, gps: { latitude: 31.2, longitude: 121.5 } })
+    expect(result.metadata.kind === 'image' && JSON.stringify(result.metadata.photography)).not.toMatch(/latitude|longitude|gps/iu)
+    for (const item of result.variants) { const publicDetails = await sharp(item.path).metadata(); expect(publicDetails.exif).toBeUndefined(); expect(publicDetails.xmp).toBeUndefined() }
+    expect(await hashFile(input)).toBe(sourceHash)
+  })
   it('decodes a real WAV and produces playable AAC with verified duration', async () => {
     const input = resolve(root, 'tone.wav')
     ffmpeg(['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '1', input])

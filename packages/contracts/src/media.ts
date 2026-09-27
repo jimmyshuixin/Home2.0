@@ -45,9 +45,16 @@ export const PhotographyMetadataSchema = z.object({
   timezoneOffset: z.string().regex(/^[+-](?:0\d|1[0-3]):[0-5]\d$|^[+-]14:00$/u).optional(),
 }).strict();
 export type PhotographyMetadata = z.infer<typeof PhotographyMetadataSchema>;
+/** Private source coordinates. Public locations require a separate publication decision. */
+export const PhotoCoordinatesSchema = z.object({
+  latitude: z.number().finite().min(-90).max(90).transform(value => value === 0 ? 0 : value),
+  longitude: z.number().finite().min(-180).max(180).transform(value => value === 0 ? 0 : value),
+}).strict();
+export type PhotoCoordinates = z.infer<typeof PhotoCoordinatesSchema>;
+export const PHOTO_METADATA_EXTRACTOR_VERSION = 2 as const;
 const pixelDimension = z.number().int().positive().max(MEDIA_LIMITS.imagePixels);
 export const DetectedMediaMetadataSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('image'), detectedMime: ImageMimeSchema, bytes: byteCount(MEDIA_LIMITS.imageBytes), sha256: Sha256Schema, width: pixelDimension, height: pixelDimension, photography: PhotographyMetadataSchema.optional() }).strict(),
+  z.object({ kind: z.literal('image'), detectedMime: ImageMimeSchema, bytes: byteCount(MEDIA_LIMITS.imageBytes), sha256: Sha256Schema, width: pixelDimension, height: pixelDimension, photography: PhotographyMetadataSchema.optional(), gps: PhotoCoordinatesSchema.optional() }).strict(),
   z.object({ kind: z.literal('audio'), detectedMime: AudioMimeSchema, bytes: byteCount(MEDIA_LIMITS.audioBytes), sha256: Sha256Schema, durationMs: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict(),
   z.object({ kind: z.literal('video'), detectedMime: VideoMimeSchema, bytes: byteCount(MEDIA_LIMITS.videoBytes), sha256: Sha256Schema, width: pixelDimension, height: pixelDimension, durationMs: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict(),
   z.object({ kind: z.literal('file'), detectedMime: FileMimeSchema, bytes: byteCount(MEDIA_LIMITS.fileBytes), sha256: Sha256Schema }).strict(),

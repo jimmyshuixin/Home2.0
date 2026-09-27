@@ -1,22 +1,29 @@
 import { z } from 'zod';
-import { IdSchema, MEDIA_LIMITS, PhotographyMetadataSchema, Sha256Schema } from '@xvyin/contracts';
+import { IdSchema, MEDIA_LIMITS, PHOTO_METADATA_EXTRACTOR_VERSION, PhotographyMetadataSchema, PhotoCoordinatesSchema, Sha256Schema } from '@xvyin/contracts';
 import type { MediaAsset } from './media';
 import type { Store } from './store/types';
 import { assert } from './errors';
 
-const completion = z.object({ sha256: Sha256Schema, photography: PhotographyMetadataSchema.refine(value => Object.keys(value).length > 0).nullable() }).strict();
+const completion = z.object({
+  sha256: Sha256Schema, extractorVersion: z.literal(PHOTO_METADATA_EXTRACTOR_VERSION),
+  photography: PhotographyMetadataSchema.refine(value => Object.keys(value).length > 0).nullable(),
+  gps: PhotoCoordinatesSchema.nullable().optional(),
+}).strict();
 function eligible(asset: MediaAsset | null): asset is MediaAsset & { metadata: NonNullable<MediaAsset['metadata']> & { kind: 'image' } } {
   return Boolean(asset && asset.kind === 'image' && asset.status === 'ready' && (!asset.lifecycle || asset.lifecycle === 'active') && asset.metadata?.kind === 'image'
     && asset.originalBytes > 0 && asset.originalBytes <= MEDIA_LIMITS.imageBytes && asset.metadata.bytes === asset.originalBytes && Sha256Schema.safeParse(asset.metadata.sha256).success);
 }
-/** Maintenance runs add the same allowlisted EXIF fields as new uploads.
+function currentExtraction(asset: MediaAsset): boolean {
+  return asset.photographyBackfill?.version === PHOTO_METADATA_EXTRACTOR_VERSION && asset.photographyBackfill.sha256 === asset.metadata?.sha256;
+}
+/** Maintenance runs add the same allowlisted EXIF/XMP fields as new uploads.
  * Original objects, derivatives, content drafts and quota are never written here.
  */
 export class PhotographyBackfill {
   constructor(private readonly store: Store, private readonly bucket: R2Bucket, private readonly now: () => number) {}
   async page(cursor?: string) {
     const page = await this.store.list<MediaAsset>('media', { limit: 20, ...(cursor ? { cursor } : {}) });
-    const items = page.items.map(row => row.data).filter(asset => eligible(asset) && !asset.metadata.photography && asset.photographyBackfill?.version !== 1)
+    const items = page.items.map(row => row.data).filter(asset => eligible(asset) && !currentExtraction(asset))
       .map(asset => ({ id: asset.id, bytes: asset.originalBytes, mime: asset.metadata!.detectedMime, sha256: asset.metadata!.sha256, sourceUrl: `/api/v1/internal/photography/${asset.id}/source` }));
     return { items, nextCursor: page.nextCursor, scanned: page.items.length };
   }
@@ -34,10 +41,26 @@ export class PhotographyBackfill {
       const asset = await tx.get<MediaAsset>(`media/${id}`);
       assert(eligible(asset), 'PHOTO_NOT_READY', 409, '照片状态已改变，请重新识别');
       assert(asset.metadata.sha256 === values.sha256, 'ORIGINAL_MISMATCH', 422, '摄影参数不属于此照片原件');
-      if (asset.metadata.photography || asset.photographyBackfill?.version === 1) return { status: 'already_done' };
-      const at = new Date(this.now()).toISOString(), status = values.photography ? 'updated' : 'no_exif';
-      const next: MediaAsset = { ...asset, metadata: { ...asset.metadata, ...(values.photography ? { photography: values.photography } : {}) },
-        version: (asset.version || 1) + 1, updatedAt: at, photographyBackfill: { version: 1, sha256: values.sha256, checkedAt: at, status } };
+      if (currentExtraction(asset)) return { status: 'already_done' };
+      const at = new Date(this.now()).toISOString(), status = values.photography || values.gps ? 'updated' : 'no_exif';
+      // Existing valid fields win. A rescan fills missing fields, and absent/failed
+      // reads cannot erase earlier values. Album/manual dates are never touched.
+      const photography = values.photography || asset.metadata.photography ? { ...values.photography, ...asset.metadata.photography } : undefined;
+      const previousPhoto = asset.metadata.photography;
+      // Version 1 treated the legacy SHORT saturation sentinel as an exact ISO.
+      // Only this known invalid historical value may yield to a verified new ISO.
+      if (photography && previousPhoto?.iso === 65535 && values.photography?.iso && values.photography.iso !== 65535) photography.iso = values.photography.iso;
+      if (photography && (previousPhoto?.takenAt || previousPhoto?.takenDate)) {
+        // Keep a timestamp and its offset together; do not attach a new XMP offset
+        // to a different earlier capture clock.
+        delete photography.takenAt; delete photography.takenDate; delete photography.timezoneOffset;
+        if (previousPhoto.takenAt) photography.takenAt = previousPhoto.takenAt;
+        if (previousPhoto.takenDate) photography.takenDate = previousPhoto.takenDate;
+        if (previousPhoto.timezoneOffset) photography.timezoneOffset = previousPhoto.timezoneOffset;
+      }
+      const gps = asset.metadata.gps || values.gps;
+      const next: MediaAsset = { ...asset, metadata: { ...asset.metadata, ...(photography ? { photography } : {}), ...(gps ? { gps } : {}) },
+        version: (asset.version || 1) + 1, updatedAt: at, photographyBackfill: { version: PHOTO_METADATA_EXTRACTOR_VERSION, sha256: values.sha256, checkedAt: at, status } };
       tx.put(`media/${id}`, next);
       return { status };
     });

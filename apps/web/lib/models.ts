@@ -1,4 +1,4 @@
-import type { ContentBlock, CreationDraft, AlbumDraft, AlbumPhoto, FitnessEntryDraft, FitnessSettingsDraft, PlaylistDraft, PlaylistTrack, PublicMediaAsset, PublicMediaVariant, SiteSettings, RichTextDocument, RichParagraph, RichHeading, RichList, RichListItem, RichInline, ProviderRef } from '@xvyin/contracts'
+import type { ContentBlock, CreationDraft, PublishableAlbum, AlbumPhoto, FitnessEntryDraft, FitnessSettingsDraft, PlaylistDraft, PlaylistTrack, PublicMediaAsset, PublicMediaVariant, SiteSettings, RichTextDocument, RichParagraph, RichHeading, RichList, RichListItem, RichInline, ProviderRef } from '@xvyin/contracts'
 export type Block = ContentBlock
 export type RichNode = RichTextDocument | RichParagraph | RichHeading | RichList | RichListItem | RichInline
 export type Photo = Pick<AlbumPhoto, 'assetId' | 'alt'> & Partial<Omit<AlbumPhoto, 'assetId' | 'alt'>> & { title?: string }
@@ -6,7 +6,7 @@ export type Variant = PublicMediaVariant
 export type Asset = PublicMediaAsset
 type Published<T> = T & { id: string; revisionId: string; publishedAt: string }
 export type Creation = Published<CreationDraft>
-export type Album = Published<AlbumDraft>
+export type Album = Published<PublishableAlbum>
 export type FitnessEntry = Published<FitnessEntryDraft>
 export type Track = PlaylistTrack & { url?: string; audioUrl?: string; coverUrl?: string; lyrics?: string; lyricsUrl?: string; sourceUrl?: string; durationMs?: number; playback?: { kind: 'qq-anonymous'; songmid: string } }
 export type Playlist = Omit<Published<PlaylistDraft>, 'tracks'> & { title: string; tracks: Track[]; sourceUrl?: string }

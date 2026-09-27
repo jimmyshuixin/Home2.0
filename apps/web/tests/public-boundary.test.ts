@@ -39,6 +39,14 @@ describe('public build input boundary', () => {
     expect(publicSnapshot(input).settings).toMatchObject({ heroTitle: 'Hello! I am 虚宁', intro: 'Existing introduction' })
     expect(JSON.stringify(input)).toBe(serialized)
   })
+  it('accepts only the final published location, never private map choices or preparation queues', () => {
+    const photo = { id: 'photo', assetId: 'image', alt: 'QA fixture', status: 'published', location: { latitude: 30, longitude: 120, precision: 'city', label: 'Chosen city' } }
+    const album = { id: 'album', revisionId: 'rev', publishedAt: '2026-09-12T00:00:00.000Z', title: 'QA fixture', slug: 'qa-fixture', photos: [photo] }
+    expect(publicSnapshot({ ...empty(), albums: [album] }).albums[0]?.photos[0]?.location).toEqual(photo.location)
+    expect(() => publicSnapshot({ ...empty(), albums: [{ ...album, photos: [{ ...photo, map: { visibility: 'hidden', coordinates: { latitude: 31.123456, longitude: 121.654321 } } }] }] })).toThrow()
+    expect(() => publicSnapshot({ ...empty(), pendingPhotoLocations: [{ albumId: 'album', photoId: 'photo', assetId: 'image' }] })).toThrow()
+    expect(() => publicSnapshot({ ...empty(), assets: [{ id: 'a', kind: 'image', gps: { latitude: 31.123456, longitude: 121.654321 }, variants: [{ role: 'content', url: '/api/v1/media/a/content', mime: 'image/webp', bytes: 200 }] }] })).toThrow()
+  })
   it('keeps published platform visibility independent and leaves legacy snapshots immutable', () => {
     const legacy = empty(), serialized = JSON.stringify(legacy)
     expect(publicSnapshot(legacy).settings.socialVisibility).toEqual({ bilibili: true, douyin: true, github: true })

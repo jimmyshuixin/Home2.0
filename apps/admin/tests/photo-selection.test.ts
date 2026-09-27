@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appendReadyPhotos, applyPhotoMetadata } from '../src/photo-selection';
+import { appendReadyPhotos, applyPhotoMetadata, replacePhotoAsset } from '../src/photo-selection';
 import { providerContentId } from '../src/provider-input';
 import type { MediaItem } from '../src/api';
 const image = (id: string, status = 'ready'): MediaItem => ({ id, kind: 'image', status, originalName: `${id}.jpg`, originalBytes: 100, variants: [], metadata: { photography: { takenDate: '2026-08-23' } } });
@@ -32,5 +32,34 @@ describe('provider link normalization', () => {
     expect(providerContentId('douyin', 'https://www.douyin.com/video/7661639577056136457?previous_page=web_code_link')).toBe('7661639577056136457');
     expect(providerContentId('douyin', '7661639577056136457')).toBe('7661639577056136457');
     for (const value of ['https://v.douyin.com/share-token/', 'https://www.douyin.com.evil.invalid/video/7661639577056136457', 'https://user@www.douyin.com/video/7661639577056136457', 'https://www.douyin.com/video/7661639577056136457/extra', 'https://www.douyin.com/user/7661639577056136457', 'https://www.douyin.com/video/123', 'http://www.douyin.com/video/7661639577056136457']) expect(providerContentId('douyin', value)).toBe(value);
+  });
+  it('keeps new photography locations private even when the source image has GPS', () => {
+    const located = { ...image('with-gps'), metadata: { gps: { latitude: 31.82, longitude: 117.23 } } };
+    const photo = appendReadyPhotos([], [located], 1, true)[0]!;
+    expect(photo.map).toEqual({ visibility: 'hidden', source: 'exif' });
+    expect(JSON.stringify(photo)).not.toContain('31.82');
+    expect(appendReadyPhotos([], [located], 1)[0]).not.toHaveProperty('map');
+  });
+  it('clears all prior location data on image replacement while preserving manual dates and descriptions', () => {
+    const photo = appendReadyPhotos([], [image('original')], 1, true)[0]!;
+    photo.photoDate = '2025-01-01'; photo.alt = 'Manual description';
+    photo.map = { visibility: 'city', source: 'manual', coordinates: { latitude: 31.123, longitude: 117.456 }, label: 'Private place', cityLabel: '合肥', city: { latitude: 31.82, longitude: 117.23, label: '合肥' } };
+    replacePhotoAsset(photo, 'replacement', true); applyPhotoMetadata(photo, image('replacement'));
+    expect(photo.assetId).toBe('replacement');
+    expect(photo.map).toEqual({ visibility: 'hidden', source: 'exif' });
+    expect(photo.photoDate).toBe('2025-01-01'); expect(photo.alt).toBe('Manual description');
+  });
+  it('does not discard location when the same image is selected again', () => {
+    const photo = appendReadyPhotos([], [image('same')], 1, true)[0]!;
+    photo.map = { visibility: 'exact', source: 'manual', coordinates: { latitude: 0, longitude: 0 } };
+    replacePhotoAsset(photo, 'same', true);
+    expect(photo.map).toEqual({ visibility: 'exact', source: 'manual', coordinates: { latitude: 0, longitude: 0 } });
+  });
+  it('does not add map settings to fitness images when replacing or clearing their asset', () => {
+    const photo = appendReadyPhotos([], [image('fitness')], 1)[0]!;
+    replacePhotoAsset(photo, 'next');
+    expect(photo).not.toHaveProperty('map');
+    replacePhotoAsset(photo, null);
+    expect(photo.assetId).toBe(''); expect(photo).not.toHaveProperty('map');
   });
 });

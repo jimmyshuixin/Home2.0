@@ -38,14 +38,14 @@ describe('metadata-only existing photo maintenance', () => {
     await store.transaction(async tx => { tx.put('system/media_quota',{usedBytes:123,reservedBytes:7}); tx.put('albums/draft',{title:'unsaved unpublished content'}); });
     const original = await bucket.head(asset.originalKey), derivative = await bucket.head(asset.variants[0]!.key);
     const stream = await backfill.source(asset.id); expect(stream.headers.get('cache-control')).toBe('private, no-store'); expect(new Uint8Array(await stream.arrayBuffer())).toEqual(source);
-    expect(await backfill.complete(asset.id,{sha256:hash,photography:{cameraModel:'ILCE-7M4',iso:400,takenAt:'2025-03-04T12:30:00',takenDate:'2025-03-04'}})).toEqual({status:'updated'});
+    expect(await backfill.complete(asset.id,{extractorVersion:2,sha256:hash,photography:{cameraModel:'ILCE-7M4',iso:400,takenAt:'2025-03-04T12:30:00',takenDate:'2025-03-04'}})).toEqual({status:'updated'});
     const updated = (await store.get<MediaAsset>(`media/${asset.id}`))!;
     expect(updated.metadata).toMatchObject({...asset.metadata,photography:{cameraModel:'ILCE-7M4',iso:400}});
     expect(updated.variants).toEqual(asset.variants); expect(updated.originalKey).toBe(asset.originalKey); expect(updated.originalBytes).toBe(asset.originalBytes); expect(updated.version).toBe(2);
     expect((await store.get<MediaAsset>(`media_catalog/${asset.id}`))!.metadata).toEqual(updated.metadata);
     expect((await bucket.head(asset.originalKey))!.etag).toBe(original!.etag); expect((await bucket.head(asset.variants[0]!.key))!.etag).toBe(derivative!.etag);
     expect(await store.get('system/media_quota')).toEqual({usedBytes:123,reservedBytes:7}); expect(await store.get('albums/draft')).toEqual({title:'unsaved unpublished content'});
-    expect(await backfill.complete(asset.id,{sha256:hash,photography:{cameraModel:'do not overwrite'}})).toEqual({status:'already_done'});
+    expect(await backfill.complete(asset.id,{extractorVersion:2,sha256:hash,photography:{cameraModel:'do not overwrite'}})).toEqual({status:'already_done'});
     expect(await store.get(`media/${asset.id}`)).toEqual(updated);
   });
   it('marks absent EXIF once without inventing values and paginates even a fully skipped page', async () => {
@@ -53,19 +53,19 @@ describe('metadata-only existing photo maintenance', () => {
     const first = await backfill.page(); expect(first.scanned).toBe(20); expect(first.items).toEqual([]); expect(first.nextCursor).toBeTruthy();
     const second = await backfill.page(first.nextCursor!); expect(second.scanned).toBe(2); expect(second.items).toHaveLength(2); expect(second.nextCursor).toBeNull();
     const item=second.items[0]!; expect(Object.keys(item).sort()).toEqual(['bytes','id','mime','sha256','sourceUrl']);
-    expect(await backfill.complete(item.id,{sha256:item.sha256,photography:null})).toEqual({status:'no_exif'});
-    expect(await backfill.complete(item.id,{sha256:item.sha256,photography:null})).toEqual({status:'already_done'});
+    expect(await backfill.complete(item.id,{extractorVersion:2,sha256:item.sha256,photography:null})).toEqual({status:'no_exif'});
+    expect(await backfill.complete(item.id,{extractorVersion:2,sha256:item.sha256,photography:null})).toEqual({status:'already_done'});
     const updated = (await store.get<MediaAsset>(`media/${item.id}`))!; expect(updated.metadata).not.toHaveProperty('photography'); expect(updated.photographyBackfill?.status).toBe('no_exif');
     expect((await backfill.page(first.nextCursor!)).items).toHaveLength(1);
   });
   it('rejects private fields, stale hashes, missing originals and lifecycle races', async () => {
     const {asset,hash}=await seed();
-    await expect(backfill.complete(asset.id,{sha256:hash,photography:{cameraModel:'camera',gps:'private'}})).rejects.toHaveProperty('name','ZodError');
-    await expect(backfill.complete(asset.id,{sha256:hash,photography:{}})).rejects.toHaveProperty('name','ZodError');
-    await expect(backfill.complete(asset.id,{sha256:'f'.repeat(64),photography:{iso:100}})).rejects.toMatchObject({code:'ORIGINAL_MISMATCH'});
+    await expect(backfill.complete(asset.id,{extractorVersion:2,sha256:hash,photography:{cameraModel:'camera',gps:'private'}})).rejects.toHaveProperty('name','ZodError');
+    await expect(backfill.complete(asset.id,{extractorVersion:2,sha256:hash,photography:{}})).rejects.toHaveProperty('name','ZodError');
+    await expect(backfill.complete(asset.id,{extractorVersion:2,sha256:'f'.repeat(64),photography:{iso:100}})).rejects.toMatchObject({code:'ORIGINAL_MISMATCH'});
     await bucket.put(asset.originalKey,'changed'); await expect(backfill.source(asset.id)).rejects.toMatchObject({code:'ORIGINAL_MISMATCH'});
     await store.transaction(async tx=>{tx.put(`media/${asset.id}`,{...asset,lifecycle:'trash'});});
-    await expect(backfill.complete(asset.id,{sha256:hash,photography:{iso:100}})).rejects.toMatchObject({code:'PHOTO_NOT_READY'});
+    await expect(backfill.complete(asset.id,{extractorVersion:2,sha256:hash,photography:{iso:100}})).rejects.toMatchObject({code:'PHOTO_NOT_READY'});
     expect((await backfill.page()).items).toEqual([]);
   });
   it('requires authenticated current-revision runner for every maintenance endpoint', async () => {
@@ -73,11 +73,55 @@ describe('metadata-only existing photo maintenance', () => {
     const api=createApi({store,bucket,auth:{} as AuthProvider,now:()=>now,privacySalt:'test-only-salt-01234567890123456789',secureCookies:true,allowedOrigins:[origin],adminUsername:'test',codeSha,
       verifyRunner:async request=>{const auth=request.headers.get('authorization');if(!['Bearer approved','Bearer old'].includes(auth || ''))throw new ApiError('RUNNER_UNAUTHORIZED',403,'denied'); return {runId:'github-test',codeSha:auth==='Bearer old'?'b'.repeat(40):codeSha};}});
     for(const path of ['/api/v1/internal/photography','/api/v1/internal/photography/photo/source','/api/v1/internal/photography/photo/complete']){
-      const method=path.endsWith('/complete')?'POST':'GET', body=method==='POST'?JSON.stringify({sha256:hash,photography:{iso:100}}):undefined;
+      const method=path.endsWith('/complete')?'POST':'GET', body=method==='POST'?JSON.stringify({extractorVersion:2,sha256:hash,photography:{iso:100}}):undefined;
       for(const authorization of [undefined,'Bearer invalid','Bearer old']){
         const response=await api.app.fetch(new Request(origin+path,{method,headers:{origin,...(authorization?{authorization}:{})},body})); expect([401,403]).toContain(response.status);
       }
       const response=await api.app.fetch(new Request(origin+path,{method,headers:{authorization:'Bearer approved','content-type':'application/json'},body})); expect(response.status).toBe(200);
     }
+  });
+  it('rescans version 1 no_exif and partial records, fills only absent fields and preserves a manual album date', async () => {
+    const missing = await seed('old-empty'), partial = await seed('old-partial');
+    const partialMetadata = { ...partial.asset.metadata!, photography: { cameraMake: 'Canon', takenDate: '2024-01-02', takenAt: '2024-01-02T03:04:05' } };
+    await store.transaction(async tx => {
+      tx.put(`media/${missing.asset.id}`, { ...missing.asset, photographyBackfill: { version: 1, sha256: missing.hash, checkedAt: '2026-01-01T00:00:00Z', status: 'no_exif' } });
+      tx.put(`media/${partial.asset.id}`, { ...partial.asset, metadata: partialMetadata });
+      tx.put('albums/manual', { photos: [{ assetId: partial.asset.id, photoDate: '2020-12-31' }] });
+    });
+    expect((await backfill.page()).items.map(item => item.id).sort()).toEqual(['old-empty', 'old-partial']);
+    await backfill.complete(missing.asset.id, { extractorVersion: 2, sha256: missing.hash, photography: { cameraModel: 'Canon EOS R6m2' } });
+    await backfill.complete(partial.asset.id, { extractorVersion: 2, sha256: partial.hash, photography: { cameraMake: 'Different', cameraModel: 'Canon EOS R6m2', iso: 100, takenAt: '2026-09-27T19:21:19', takenDate: '2026-09-27', timezoneOffset: '+08:00' }, gps: { latitude: 31.2, longitude: 121.5 } });
+    const updated = (await store.get<MediaAsset>(`media/${partial.asset.id}`))!;
+    expect(updated.metadata).toMatchObject({ photography: { cameraMake: 'Canon', cameraModel: 'Canon EOS R6m2', iso: 100, takenDate: '2024-01-02', takenAt: '2024-01-02T03:04:05' }, gps: { latitude: 31.2, longitude: 121.5 } });
+    expect(updated.metadata?.kind === 'image' && updated.metadata.photography?.timezoneOffset).toBeUndefined();
+    expect(updated.photographyBackfill).toMatchObject({ version: 2, sha256: partial.hash, status: 'updated' });
+    expect((await backfill.page()).items).toEqual([]);
+    expect(await store.get('albums/manual')).toEqual({ photos: [{ assetId: partial.asset.id, photoDate: '2020-12-31' }] });
+  });
+  it('does not erase old metadata on an empty read and keys replay protection to the original hash', async () => {
+    const { asset, hash } = await seed();
+    const metadata = { ...asset.metadata!, photography: { cameraModel: 'Canon', takenAt: '2024-01-02T03:04:05', takenDate: '2024-01-02' }, gps: { latitude: 0, longitude: 0 } };
+    await store.transaction(async tx => tx.put(`media/${asset.id}`, { ...asset, metadata, photographyBackfill: { version: 2, sha256: 'a'.repeat(64), checkedAt: '2026-01-01T00:00:00Z', status: 'updated' } }));
+    expect((await backfill.page()).items).toHaveLength(1);
+    await backfill.complete(asset.id, { extractorVersion: 2, sha256: hash, photography: null, gps: null });
+    expect((await store.get<MediaAsset>(`media/${asset.id}`))!.metadata).toEqual(metadata);
+    expect(await backfill.complete(asset.id, { extractorVersion: 2, sha256: hash, photography: null })).toEqual({ status: 'already_done' });
+  });
+  it('validates GPS and requires a current extractor version before persisting any values', async () => {
+    const { asset, hash } = await seed();
+    for (const gps of [{ latitude: 91, longitude: 0 }, { latitude: 0, longitude: Infinity }, { latitude: 1, longitude: 2, altitude: 3 }]) {
+      await expect(backfill.complete(asset.id, { extractorVersion: 2, sha256: hash, photography: null, gps })).rejects.toHaveProperty('name', 'ZodError');
+    }
+    await expect(backfill.complete(asset.id, { extractorVersion: 1, sha256: hash, photography: { iso: 100 } })).rejects.toHaveProperty('name', 'ZodError');
+    expect(await backfill.complete(asset.id, { extractorVersion: 2, sha256: hash, photography: null, gps: { latitude: -0, longitude: -0 } })).toEqual({ status: 'updated' });
+    const updated = (await store.get<MediaAsset>(`media/${asset.id}`))!;
+    expect(updated.metadata?.kind === 'image' && updated.metadata.gps).toEqual({ latitude: 0, longitude: 0 });
+  });
+  it('repairs only the known historical saturated ISO sentinel while retaining other valid values', async () => {
+    const { asset, hash } = await seed();
+    await store.transaction(async tx => tx.put(`media/${asset.id}`, { ...asset, metadata: { ...asset.metadata, photography: { iso: 65535, aperture: 8 } } }));
+    await backfill.complete(asset.id, { extractorVersion: 2, sha256: hash, photography: { iso: 102400, aperture: 16 } });
+    const updated = (await store.get<MediaAsset>(`media/${asset.id}`))!;
+    expect(updated.metadata?.kind === 'image' && updated.metadata.photography).toEqual({ iso: 102400, aperture: 8 });
   });
 });

@@ -3,6 +3,7 @@ import { IdSchema, plainText, requireUniqueIds, SlugSchema, SortOrderSchema, Utc
 import { atMostOneMediaSource, DraftAssetIdSchema, DraftProviderRefSchema, OptionalMediaAssetIdSchema, ProviderRefSchema } from './content';
 import { CalendarDateSchema, fitnessDayCount } from './dates';
 import { CONTENT_LIMITS, FITNESS_TIMEZONE } from './limits';
+import { PhotoCoordinatesSchema } from './media';
 
 export const VisibilitySchema = z.enum(['draft', 'published', 'hidden']);
 export const ModerationStatusSchema = z.enum(['pending', 'approved', 'rejected', 'hidden']);
@@ -38,6 +39,22 @@ export function validateFitnessSettings(input: unknown, now: Date | number) {
 export type FitnessSettingsDraft = z.infer<typeof FitnessSettingsDraftSchema>;
 export type FitnessSettings = z.infer<typeof FitnessSettingsSchema>;
 export type FitnessSettingsInput = z.infer<typeof FitnessSettingsInputSchema>;
+
+/** Private per-reference choice. A missing choice has the same meaning as hidden. */
+export const PhotoMapSettingsSchema = z.object({
+  visibility: z.enum(['hidden', 'city', 'exact']).default('hidden'),
+  source: z.enum(['exif', 'manual']).default('exif'),
+  coordinates: PhotoCoordinatesSchema.optional(), label: plainText(160).optional(), cityLabel: plainText(160).optional(),
+  // This is an administrator-selected city centre, never rounded capture GPS.
+  city: PhotoCoordinatesSchema.extend({ label: plainText(160).default('') }).strict().optional(),
+}).strict();
+export const PublicPhotoLocationSchema = PhotoCoordinatesSchema.extend({
+  label: plainText(160, 1).optional(), precision: z.enum(['city', 'exact']),
+}).strict().superRefine((value, ctx) => {
+  if (value.precision === 'city' && !value.label) ctx.addIssue({ code: 'custom', path: ['label'], message: '城市位置需要城市名称' });
+});
+export type PhotoMapSettings = z.infer<typeof PhotoMapSettingsSchema>;
+export type PublicPhotoLocation = z.infer<typeof PublicPhotoLocationSchema>;
 
 const photoDraftShape = {
   id: IdSchema, assetId: IdSchema, alt: plainText(500, 1), caption: plainText(1000).default(''),
@@ -76,10 +93,12 @@ export type FitnessPhoto = z.infer<typeof FitnessPhotoSchema>;
 export type FitnessEntryDraft = z.infer<typeof FitnessEntryDraftSchema>;
 export type FitnessEntry = z.infer<typeof FitnessEntrySchema>;
 
-export const AlbumPhotoSchema = z.object(photoDraftShape).strict();
+export const AlbumPhotoDraftSchema = FitnessPhotoDraftSchema.extend({ map: PhotoMapSettingsSchema.optional() }).strict();
+/** Public photos deliberately cannot contain the private map settings. */
+export const AlbumPhotoSchema = z.object({ ...photoDraftShape, location: PublicPhotoLocationSchema.optional() }).strict();
 const albumDraftShape = {
   title: plainText(120).default(''), slug: z.union([z.literal(''), SlugSchema]).default(''), description: plainText(5000).default(''),
-  coverAssetId: IdSchema.nullable().default(null), photos: z.array(FitnessPhotoDraftSchema).max(500).default([]),
+  coverAssetId: IdSchema.nullable().default(null), photos: z.array(AlbumPhotoDraftSchema).max(500).default([]),
   featured: z.boolean().default(false), sortOrder: SortOrderSchema,
 };
 export const AlbumDraftSchema = z.object(albumDraftShape).strict().superRefine(uniquePhotos);
@@ -87,7 +106,9 @@ export const PublishableAlbumSchema = z.object({ ...albumDraftShape, title: plai
   photos: z.array(AlbumPhotoSchema).max(500).default([]),
 }).strict().superRefine(uniquePhotos);
 export type AlbumDraft = z.infer<typeof AlbumDraftSchema>;
+export type AlbumPhotoDraft = z.infer<typeof AlbumPhotoDraftSchema>;
 export type AlbumPhoto = z.infer<typeof AlbumPhotoSchema>;
+export type PublishableAlbum = z.infer<typeof PublishableAlbumSchema>;
 
 export const PlaylistTrackSchema = z.object({
   id: IdSchema, title: plainText(120, 1), artist: plainText(120).default(''),

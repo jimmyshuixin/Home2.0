@@ -15,7 +15,7 @@ export default {
       headers.set('cache-control', isStaticAsset ? 'public, max-age=31536000, immutable' : 'private, no-store');
       headers.set('x-robots-tag', 'noindex, nofollow'); headers.set('x-content-type-options', 'nosniff');
       headers.set('referrer-policy', 'no-referrer'); headers.set('x-frame-options', 'DENY');
-      headers.set('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+      headers.set('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https://tile.openstreetmap.org; media-src 'self' blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
       return new Response(response.body, { status: response.status, headers });
     }
     return env.API.fetch(request);
