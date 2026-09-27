@@ -45,7 +45,8 @@ export const PhotoMapSettingsSchema = z.object({
   visibility: z.enum(['hidden', 'city', 'exact']).default('hidden'),
   source: z.enum(['exif', 'manual']).default('exif'),
   coordinates: PhotoCoordinatesSchema.optional(), label: plainText(160).optional(), cityLabel: plainText(160).optional(),
-  // This is an administrator-selected city centre, never rounded capture GPS.
+  // Optional administrator-selected city point. Without an override, city/exif
+  // resolves a nearby city's fixed reference point from the offline catalogue.
   city: PhotoCoordinatesSchema.extend({ label: plainText(160).default('') }).strict().optional(),
 }).strict();
 export const PublicPhotoLocationSchema = PhotoCoordinatesSchema.extend({

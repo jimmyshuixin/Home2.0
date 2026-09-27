@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { HERO_TITLE, SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, PublishableAlbumSchema, PublishablePlaylistSchema, PublishableFitnessEntrySchema, PhotoMapSettingsSchema, PhotoCoordinatesSchema, PublicPhotoLocationSchema, IdSchema, Sha256Schema, PublicMediaAssetSchema, deriveFormats, fitnessDayCount, type SiteSettings, type FitnessSettingsDraft, type CreationDraft, type PublishableAlbum, type FitnessEntryDraft, type PlaylistDraft, type PublicMediaAsset, type PublicPhotoLocation } from '@xvyin/contracts';
+import { HERO_TITLE, SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, PublishableAlbumSchema, PublishablePlaylistSchema, PublishableFitnessEntrySchema, PhotoMapSettingsSchema, PhotoCoordinatesSchema, PublicPhotoLocationSchema, IdSchema, Sha256Schema, PublicMediaAssetSchema, approximatePhotoCity, deriveFormats, fitnessDayCount, type SiteSettings, type FitnessSettingsDraft, type CreationDraft, type PublishableAlbum, type FitnessEntryDraft, type PlaylistDraft, type PublicMediaAsset, type PublicPhotoLocation } from '@xvyin/contracts';
 import type { Store } from './store/types';
 import type { DraftRecord } from './records';
 import type { MediaAsset } from './media';
@@ -29,7 +29,8 @@ export interface BuildFile { path: string; key: string; sha256: string; bytes: n
 export interface ReleaseManifest { releaseId: string; schemaVersion: 1; files: BuildFile[]; assets: Record<string, { key: string; mime: string; bytes: number; sha256: string }> }
 export interface ManifestPreparation { pending: true; phase: 'assets'; processed: number; total: number }
 const RELEASE_ASSET_BATCH_SIZE = 100;
-interface PendingPhotoLocation { albumId: string; photoId: string; assetId: string; label?: string }
+// Older frozen queues contain only exact EXIF choices and omit precision.
+interface PendingPhotoLocation { albumId: string; photoId: string; assetId: string; precision?: 'city' | 'exact'; label?: string }
 interface SnapshotSource extends Snapshot { pendingPhotoLocations?: PendingPhotoLocation[] }
 interface SnapshotPreparationState { sourceSha256: string; processed: number; assets: PublicMediaAsset[]; locationProcessed?: number; locations?: Record<string, PublicPhotoLocation> }
 interface ManifestPreparationState { inputSha256: string; snapshotSha256: string; processed: number; assets: ReleaseManifest['assets'] }
@@ -74,6 +75,10 @@ function publicationDraft<T>(schema: z.ZodType<T>, record: DraftRecord, collecti
       if (settings.visibility === 'hidden') return publicPhoto;
       const label = settings.label?.trim();
       if (settings.visibility === 'city') {
+        if (settings.source === 'exif' && !settings.city && !settings.cityLabel) {
+          pendingLocations?.push({ albumId: record.id, photoId: photo.id, assetId: photo.assetId, precision: 'city' });
+          return publicPhoto;
+        }
         assert(settings.city?.label.trim(), 'PUBLISH_VALIDATION', 422, '请为城市位置填写城市名称，并在地图上选择城市中心');
         return { ...publicPhoto, location: PublicPhotoLocationSchema.parse({ ...settings.city, precision: 'city' }) };
       }
@@ -81,7 +86,7 @@ function publicationDraft<T>(schema: z.ZodType<T>, record: DraftRecord, collecti
         assert(settings.coordinates, 'PUBLISH_VALIDATION', 422, '请为手动精确位置选择有效经纬度');
         return { ...publicPhoto, location: PublicPhotoLocationSchema.parse({ ...settings.coordinates, precision: 'exact', ...(label ? { label } : {}) }) };
       }
-      pendingLocations?.push({ albumId: record.id, photoId: photo.id, assetId: photo.assetId, ...(label ? { label } : {}) });
+      pendingLocations?.push({ albumId: record.id, photoId: photo.id, assetId: photo.assetId, precision: 'exact', ...(label ? { label } : {}) });
       return publicPhoto;
     }) : draft.photos }
     : draft;
@@ -98,15 +103,23 @@ function publicationDraft<T>(schema: z.ZodType<T>, record: DraftRecord, collecti
   throw new ApiError('PUBLISH_VALIDATION', 422, `${section}「${title}」尚未满足发布条件；草稿已保留，请补齐后再生成预览。`, fields);
 }
 function photoLocationKey(item: PendingPhotoLocation): string { return `${item.albumId}/${item.photoId}`; }
-/** Coordinates are public only for the specific photo reference that selected exact EXIF. */
+/** Resolve each selected reference server-side; automatic city never publishes capture GPS. */
 function resolvePhotoLocations(pending: PendingPhotoLocation[], records: Array<MediaAsset | null>, batchIds: string[]): Record<string, PublicPhotoLocation> {
   const byId = new Map(batchIds.map((id, index) => [id, records[index]])), locations: Record<string, PublicPhotoLocation> = {};
+  const cities = new Map<string, ReturnType<typeof approximatePhotoCity>>();
   for (const item of pending) {
     const asset = byId.get(item.assetId);
     if (asset?.metadata?.kind !== 'image') continue;
     const gps = PhotoCoordinatesSchema.safeParse((asset.metadata as typeof asset.metadata & { gps?: unknown }).gps);
-    // Missing capture GPS is a normal image state, never a fabricated map point.
-    if (gps.success) locations[photoLocationKey(item)] = PublicPhotoLocationSchema.parse({ ...gps.data, precision: 'exact', ...(item.label ? { label: item.label } : {}) });
+    // Missing GPS or an unmatched nearby city is normal, never an exact fallback.
+    if (!gps.success) continue;
+    if (item.precision === 'city') {
+      if (!cities.has(item.assetId)) cities.set(item.assetId, approximatePhotoCity(gps.data));
+      const city = cities.get(item.assetId);
+      if (city) locations[photoLocationKey(item)] = PublicPhotoLocationSchema.parse({ ...city, precision: 'city' });
+    } else {
+      locations[photoLocationKey(item)] = PublicPhotoLocationSchema.parse({ ...gps.data, precision: 'exact', ...(item.label ? { label: item.label } : {}) });
+    }
   }
   return locations;
 }
@@ -330,8 +343,8 @@ export class Releases {
     const previousById = new Map(previous?.assets.map(asset => [asset.id, asset]) || []);
     const remainingIds = (previous ? previous.assets.map(asset => asset.id) : [...collectAssetIds(snapshot)]).filter(assetId => !known.has(assetId));
     const mediaPending = new Set(remainingIds);
-    // Existing public assets are normally reused without a read. A new exact
-    // EXIF choice still needs a bounded private read for that specific photo.
+    // Existing public assets are normally reused without a read. A new automatic
+    // city or exact EXIF choice still needs a bounded private read for that photo.
     const remainingLocationIds = [...new Set(pendingPhotoLocations.map(item => item.assetId))].filter(assetId => !mediaPending.has(assetId));
     const allowedLocationKeys = new Set(pendingPhotoLocations.map(photoLocationKey));
     const key = `private-snapshot-preparation/${id}.json`, current = await this.bucket.get(key);

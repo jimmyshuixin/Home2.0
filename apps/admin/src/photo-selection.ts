@@ -9,7 +9,7 @@ export function appendReadyPhotos(photos: AlbumPhotoDraft[], items: MediaItem[],
     if (next.length >= limit) break;
     if (item.kind !== 'image' || (item.processingStatus || item.status) !== 'ready' || ids.has(item.id)) continue;
     ids.add(item.id);
-    next.push({ id: crypto.randomUUID(), assetId: item.id, alt: (item.originalName || '照片').replace(/\.[^.]+$/, '').slice(0, 500), caption: '', photoDate: item.metadata?.photography?.takenDate || null, sortOrder: next.length, featured: false, status: 'draft', ...(locationEnabled ? { map: { visibility: 'hidden' as const, source: 'exif' as const } } : {}) });
+    next.push({ id: crypto.randomUUID(), assetId: item.id, alt: (item.originalName || '照片').replace(/\.[^.]+$/, '').slice(0, 500), caption: '', photoDate: item.metadata?.photography?.takenDate || null, sortOrder: next.length, featured: false, status: 'published', ...(locationEnabled ? { map: { visibility: 'city' as const, source: 'exif' as const } } : {}) });
   }
   return next;
 }
@@ -18,7 +18,7 @@ export function replacePhotoAsset(photo: AlbumPhotoDraft, assetId: string | null
   const nextId = assetId || '';
   if (photo.assetId === nextId) return;
   photo.assetId = nextId;
-  if (locationEnabled) photo.map = { visibility: 'hidden', source: 'exif' };
+  if (locationEnabled) photo.map = { visibility: photo.map?.visibility === 'hidden' ? 'hidden' : 'city', source: 'exif' };
   else delete photo.map;
 }
 export function applyPhotoMetadata(photo: FitnessPhotoDraft, item: MediaItem) {

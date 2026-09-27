@@ -4,12 +4,26 @@ import { providerContentId } from '../src/provider-input';
 import type { MediaItem } from '../src/api';
 const image = (id: string, status = 'ready'): MediaItem => ({ id, kind: 'image', status, originalName: `${id}.jpg`, originalBytes: 100, variants: [], metadata: { photography: { takenDate: '2026-08-23' } } });
 describe('batch photo association', () => {
-  it('only appends ready unique photos within capacity and preserves order and EXIF date', () => {
+  it('defaults new ready unique photos to publish with the record and preserves capacity, order and EXIF date', () => {
     const photos = appendReadyPhotos([], [image('first'), image('pending', 'processing'), image('first'), image('second'), image('third')], 2);
     expect(photos.map(photo => photo.assetId)).toEqual(['first', 'second']);
     expect(photos.map(photo => photo.sortOrder)).toEqual([0, 1]);
-    expect(photos.every(photo => photo.status === 'draft' && photo.photoDate === '2026-08-23')).toBe(true);
+    expect(photos.every(photo => photo.status === 'published' && photo.photoDate === '2026-08-23')).toBe(true);
     expect(appendReadyPhotos(photos, [image('first')], 100)).toEqual(photos);
+  });
+  it('preserves existing draft, hidden and published choices when adding photos or replacing assets', () => {
+    const photos = appendReadyPhotos([], [image('draft'), image('hidden'), image('published')], 5, true);
+    photos[0]!.status = 'draft'; photos[1]!.status = 'hidden';
+    const before = JSON.stringify(photos);
+    const next = appendReadyPhotos(photos, [image('hidden'), image('new')], 5, true);
+    expect(next.map(photo => photo.status)).toEqual(['draft', 'hidden', 'published', 'published']);
+    expect(JSON.stringify(photos)).toBe(before);
+    for (const photo of next.slice(0, 3)) {
+      const status = photo.status;
+      replacePhotoAsset(photo, `${photo.assetId}-replacement`, true);
+      applyPhotoMetadata(photo, image(photo.assetId));
+      expect(photo.status).toBe(status);
+    }
   });
   it('does not replace manually entered photo dates or descriptions', () => {
     const photo = appendReadyPhotos([], [image('photo')], 1)[0]!;
@@ -33,10 +47,10 @@ describe('provider link normalization', () => {
     expect(providerContentId('douyin', '7661639577056136457')).toBe('7661639577056136457');
     for (const value of ['https://v.douyin.com/share-token/', 'https://www.douyin.com.evil.invalid/video/7661639577056136457', 'https://user@www.douyin.com/video/7661639577056136457', 'https://www.douyin.com/video/7661639577056136457/extra', 'https://www.douyin.com/user/7661639577056136457', 'https://www.douyin.com/video/123', 'http://www.douyin.com/video/7661639577056136457']) expect(providerContentId('douyin', value)).toBe(value);
   });
-  it('keeps new photography locations private even when the source image has GPS', () => {
+  it('defaults new photography to automatic city visibility without copying precise GPS into the photo', () => {
     const located = { ...image('with-gps'), metadata: { gps: { latitude: 31.82, longitude: 117.23 } } };
     const photo = appendReadyPhotos([], [located], 1, true)[0]!;
-    expect(photo.map).toEqual({ visibility: 'hidden', source: 'exif' });
+    expect(photo.map).toEqual({ visibility: 'city', source: 'exif' });
     expect(JSON.stringify(photo)).not.toContain('31.82');
     expect(appendReadyPhotos([], [located], 1)[0]).not.toHaveProperty('map');
   });
@@ -46,7 +60,7 @@ describe('provider link normalization', () => {
     photo.map = { visibility: 'city', source: 'manual', coordinates: { latitude: 31.123, longitude: 117.456 }, label: 'Private place', cityLabel: '合肥', city: { latitude: 31.82, longitude: 117.23, label: '合肥' } };
     replacePhotoAsset(photo, 'replacement', true); applyPhotoMetadata(photo, image('replacement'));
     expect(photo.assetId).toBe('replacement');
-    expect(photo.map).toEqual({ visibility: 'hidden', source: 'exif' });
+    expect(photo.map).toEqual({ visibility: 'city', source: 'exif' });
     expect(photo.photoDate).toBe('2025-01-01'); expect(photo.alt).toBe('Manual description');
   });
   it('does not discard location when the same image is selected again', () => {
@@ -54,6 +68,13 @@ describe('provider link normalization', () => {
     photo.map = { visibility: 'exact', source: 'manual', coordinates: { latitude: 0, longitude: 0 } };
     replacePhotoAsset(photo, 'same', true);
     expect(photo.map).toEqual({ visibility: 'exact', source: 'manual', coordinates: { latitude: 0, longitude: 0 } });
+  });
+  it('keeps an explicit hidden location choice when replacing an image and discards its old coordinates', () => {
+    const photo = appendReadyPhotos([], [image('hidden-location')], 1, true)[0]!;
+    photo.map = { visibility: 'hidden', source: 'manual', coordinates: { latitude: 31.123, longitude: 117.456 }, cityLabel: 'Private city', city: { latitude: 31.82, longitude: 117.23, label: 'Private city' } };
+    replacePhotoAsset(photo, 'replacement-with-gps', true);
+    expect(photo.map).toEqual({ visibility: 'hidden', source: 'exif' });
+    expect(photo.status).toBe('published');
   });
   it('does not add map settings to fitness images when replacing or clearing their asset', () => {
     const photo = appendReadyPhotos([], [image('fitness')], 1)[0]!;

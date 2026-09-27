@@ -5,6 +5,7 @@ export * from './content';
 export * from './settings';
 export * from './models';
 export * from './media';
+export * from './photo-city';
 export * from './api';
 export * from './engagement';
 export * from './bilibili';

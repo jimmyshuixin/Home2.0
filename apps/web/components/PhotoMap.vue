@@ -106,7 +106,7 @@ onBeforeUnmount(() => { disposed = true; map?.remove(); markers.clear() })
         </div>
         <section v-if="selected" ref="detail" class="map-detail" tabindex="-1" aria-label="选中的照片">
           <div class="map-detail-heading"><h3>{{ selected.location.label || '在此留下的片刻' }}</h3><button type="button" aria-label="关闭选中的照片" @click="selectedKey = ''">×</button></div>
-          <p class="map-note">{{ selected.location.precision === 'city' ? '展示城市中心' : '展示拍摄位置' }}</p>
+          <p class="map-note">{{ selected.location.precision === 'city' ? '展示城市级参考位置' : '展示拍摄位置' }}</p>
           <PhotoGallery :key="selected.key" :photos="[selected.photo]" :album-id="selected.album.id" layout="continuous" />
           <NuxtLink class="text-link map-album-link" :to="`/photography/${selected.album.slug}`">走进「{{ selected.album.title }}」<SiteIcon name="arrow" :size="18" /></NuxtLink>
         </section>
