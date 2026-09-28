@@ -5,6 +5,7 @@ import { ApiError } from '../src/errors';
 import { sanitizeBilibiliProfile } from '../src/bilibili';
 import { sanitizeGitHubProfile } from '../src/github-public';
 import { verifySocialSyncRunner } from '../src/social-sync-auth';
+import { unavailableDouyinProfile } from '../src/douyin-public';
 
 const origin = 'https://test.invalid', now = Date.UTC(2026, 8, 26, 15);
 const identity = { runId: 'github-1234', runAttempt: '1', codeSha: 'a'.repeat(40) };
@@ -51,20 +52,29 @@ describe('anonymous social profiles and dedicated runner routes', () => {
     }
     expect(runtime.verifySocialRunner).not.toHaveBeenCalled(); expect(runtime.verifyRunner).toHaveBeenCalledTimes(2);
   });
-  it('imports only public data then serves both cards without cookies, secrets or direct upstream reads', async () => {
+  it('imports only public data then serves all three cards without cookies, secrets or direct upstream reads', async () => {
     runtime.verifySocialRunner = async () => identity;
     const api = createApi(runtime);
     const claimResponse = await api.app.request(`${origin}/api/v1/internal/social-sync/claim`, submit({}));
     const claim = (await claimResponse.json() as { data: { claimId: string } }).data;
     const bilibili = sanitizeBilibiliProfile({ code: 0, data: { card: { mid: '520237303', name: '公开作者' }, follower: 42 } }, now);
     const github = sanitizeGitHubProfile({ id: 121843277, login: 'jimmyshuixin', html_url: 'https://github.com/jimmyshuixin', type: 'User', name: '公开作者', email: 'must-not-leak' }, now);
-    const res = await api.app.request(`${origin}/api/v1/internal/social-sync`, submit({ claimId: claim.claimId, bilibili: { status: 'ok', profile: bilibili }, github: { status: 'ok', profile: github } }));
+    const douyin = { ...unavailableDouyinProfile(), name: '公开作者', followers: 42, updatedAt: new Date(now).toISOString(), status: 'fresh' };
+    const res = await api.app.request(`${origin}/api/v1/internal/social-sync`, submit({ claimId: claim.claimId, bilibili: { status: 'ok', profile: bilibili }, github: { status: 'ok', profile: github }, douyin: { status: 'ok', profile: douyin } }));
     expect(res.status).toBe(200);
-    for (const [provider, profile] of [['bilibili', bilibili], ['github', github]] as const) {
+    for (const [provider, profile] of [['bilibili', bilibili], ['github', github], ['douyin', douyin]] as const) {
       const response = await api.app.request(`${origin}/api/v1/${provider}/profile`, { headers: { cookie: 'SESSDATA=ignored-visitor-value' } });
       expect(response.status).toBe(200); expect((await response.json() as { data: unknown }).data).toEqual(profile);
     }
     expect(runtime.bilibiliFetch).not.toHaveBeenCalled(); expect(JSON.stringify(await runtime.store.list('social_public'))).not.toContain('must-not-leak');
+  });
+  it('returns a fixed unavailable Douyin card before collection or for corrupted stored data', async () => {
+    const api = createApi(runtime), expected = unavailableDouyinProfile();
+    const first = await api.app.request(`${origin}/api/v1/douyin/profile`);
+    expect(first.status).toBe(200); expect(await first.json()).toMatchObject({ data: expected, meta: { schemaVersion: 1 } });
+    await runtime.store.transaction(async tx => { tx.put('social_public/douyin', { profile: { ...expected, name: '作者', status: 'fresh', updatedAt: new Date(now).toISOString(), cookie: 'private-do-not-expose' }, lastAttemptAt: new Date(now).toISOString(), lastError: null }); });
+    const corrupt = await api.app.request(`${origin}/api/v1/douyin/profile`);
+    expect((await corrupt.json() as { data: unknown }).data).toEqual(expected); expect(runtime.bilibiliFetch).not.toHaveBeenCalled();
   });
   it('rejects oversized imports before JSON schema traversal', async () => {
     runtime.verifySocialRunner = async () => identity;

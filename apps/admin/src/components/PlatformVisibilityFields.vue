@@ -5,7 +5,7 @@ const props = defineProps<{ modelValue: SocialVisibility }>();
 const emit = defineEmits<{ 'update:modelValue': [value: SocialVisibility] }>();
 const platforms = [
   { key: 'bilibili', label: '显示 B站资料与作品' },
-  { key: 'douyin', label: '显示抖音主页与精选视频' },
+  { key: 'douyin', label: '显示抖音资料与主页作品' },
   { key: 'github', label: '显示 GitHub 资料与项目' },
 ] as const;
 function change(platform: keyof SocialVisibility, event: Event) {

@@ -10,4 +10,5 @@ export * from './api';
 export * from './engagement';
 export * from './bilibili';
 export * from './github';
+export * from './douyin';
 export * from './social-sync';

@@ -21,6 +21,7 @@ import { readBilibiliProfile, type BilibiliFetch } from './bilibili';
 import { SocialPublicSync } from './social-sync';
 import type { SocialSyncIdentity } from './social-sync-auth';
 import { unavailableGitHubProfile } from './github-public';
+import { unavailableDouyinProfile } from './douyin-public';
 export interface Runtime {
   store: Store; bucket: R2Bucket; auth: AuthProvider; now: () => number; secureCookies: boolean;
   allowedOrigins: string[]; privacySalt: string; adminUsername: string; codeSha: string;
@@ -99,6 +100,7 @@ export function createApi(runtime: Runtime) {
   app.get('/api/v1/time', c => response({ now: new Date(runtime.now()).toISOString(), todayDate: shanghaiDate(runtime.now()), timezone: 'Asia/Shanghai' }, c.get('requestId')));
   app.get('/api/v1/bilibili/profile', async c => response(await social.publicProfile('bilibili') ?? await readBilibiliProfile({ now: runtime.now, cache: runtime.publicReadCache, fetcher: runtime.bilibiliFetch }), c.get('requestId')));
   app.get('/api/v1/github/profile', async c => response(await social.publicProfile('github') ?? unavailableGitHubProfile(), c.get('requestId')));
+  app.get('/api/v1/douyin/profile', async c => response(await social.publicProfile('douyin') ?? unavailableDouyinProfile(), c.get('requestId')));
   app.post('/api/v1/internal/social-sync/claim', async c => {
     assert(runtime.verifySocialRunner, 'SOCIAL_SYNC_UNAUTHORIZED', 401, '公开资料同步来源未获授权');
     return response(await social.claim(await runtime.verifySocialRunner(c.req.raw)), c.get('requestId'));

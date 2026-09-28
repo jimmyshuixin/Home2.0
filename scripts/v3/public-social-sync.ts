@@ -1,6 +1,7 @@
 /** Dependency-free Node runner. Provider requests are always anonymous; OIDC is only sent to this site. */
 import { pathToFileURL } from 'node:url';
-import type { BilibiliProfile, GitHubProfile, GitHubRepository, SocialSyncInput } from '@xvyin/contracts';
+import { appendFile, open } from 'node:fs/promises';
+import type { BilibiliProfile, DouyinProfile, GitHubProfile, GitHubRepository, SocialSyncInput } from '@xvyin/contracts';
 
 // Existing Pages gateway reaches the same API Worker without the custom domain's browser-only challenge.
 const ORIGIN = 'https://xvyin-v3-test.pages.dev';
@@ -8,6 +9,7 @@ const AUDIENCE = 'https://xvyin.com/public-social-sync';
 const REPOSITORY = 'jimmyshuixin/Home2.0';
 const LOGIN = 'jimmyshuixin';
 const USER_ID = 121843277;
+const DOUYIN_SEC_UID = 'MS4wLjABAAAAKZ2zSL9DDu1Uc3IZleN2zqIqoOpNXtwvAW4_2E6PBrLmkyTMw_MsrzxGVrQvvI1-';
 type Failure = 'timeout' | 'network' | 'upstream-blocked' | 'invalid-response' | 'rate-limited' | 'unavailable';
 type Fetcher = typeof fetch;
 type Environment = Readonly<Record<string, string | undefined>>;
@@ -24,6 +26,57 @@ function text(value: unknown, maximum: number): string | null {
   return Array.from(value.replace(/<[^>]*>/gu, '').replace(/[<>\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, ' ').trim()).slice(0, maximum).join('') || null;
 }
 const reason = (error: unknown): Failure => error instanceof SyncError ? error.reason : error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name) ? 'timeout' : 'network';
+
+/** Project an untrusted collector artifact before it enters the authenticated importer. */
+export function douyinCapture(value: unknown, capturedBefore = Date.now()): NonNullable<SocialSyncInput['douyin']> {
+  const source = record(value), profile = record(source?.profile);
+  const failed = (failure: Failure): NonNullable<SocialSyncInput['douyin']> => ({ status: 'failed', reason: failure });
+  if (source?.status === 'failed') return failed(['timeout', 'network', 'upstream-blocked', 'invalid-response', 'rate-limited', 'unavailable'].includes(String(source.reason)) ? source.reason as Failure : 'invalid-response');
+  const timestamp = (value: unknown): string | null => {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(value)) return null;
+    const time = Date.parse(value);
+    return Number.isFinite(time) && time <= capturedBefore ? new Date(time).toISOString() : null;
+  };
+  const updatedAt = timestamp(profile?.updatedAt), name = text(profile?.name, 80);
+  if (source?.status !== 'ok' || !profile || profile.secUid !== DOUYIN_SEC_UID || profile.profileUrl !== `https://www.douyin.com/user/${DOUYIN_SEC_UID}` || profile.status !== 'fresh' || profile.authorization !== 'public' || !updatedAt || !name) return failed('invalid-response');
+  const avatar = profile.avatarUrl;
+  const output: DouyinProfile = {
+    secUid: DOUYIN_SEC_UID, profileUrl: `https://www.douyin.com/user/${DOUYIN_SEC_UID}`, name,
+    signature: text(profile.signature, 500),
+    avatarUrl: typeof avatar === 'string' && avatar.length <= 512 && /^https:\/\/p3-pc\.douyinpic\.com\/aweme\/1080x1080\/aweme-avatar\/[A-Za-z0-9_-]+\.(?:jpe?g|png|webp)$/u.test(avatar) ? avatar : null,
+    followers: count(profile.followers), following: count(profile.following), postCount: count(profile.postCount), likes: count(profile.likes),
+    updatedAt, status: 'fresh', authorization: 'public',
+  };
+  if (profile.works !== undefined) {
+    const worksAt = timestamp(profile.worksUpdatedAt);
+    if (!Array.isArray(profile.works) || profile.works.length > 6 || !worksAt) return failed('invalid-response');
+    const works: NonNullable<DouyinProfile['works']> = [], ids = new Set<string>();
+    for (const item of profile.works) {
+      const work = record(item), id = work?.id, kind = work?.kind, title = text(work?.title, 200);
+      if (!work || typeof id !== 'string' || !/^[1-9]\d{18}$/u.test(id) || ids.has(id) || !['video', 'note'].includes(String(kind)) || work.url !== `https://www.douyin.com/${kind}/${id}` || !title) return failed('invalid-response');
+      const publishedAt = work.publishedAt === null ? null : timestamp(work.publishedAt);
+      if (work.publishedAt !== null && !publishedAt) return failed('invalid-response');
+      works.push({ id, kind: kind as 'video' | 'note', title, url: `https://www.douyin.com/${kind}/${id}`, publishedAt });
+      ids.add(id);
+    }
+    output.works = works; output.worksUpdatedAt = worksAt;
+  } else if (profile.worksUpdatedAt !== undefined) return failed('invalid-response');
+  return { status: 'ok', profile: output };
+}
+
+export async function readDouyinCapture(file = 'output/douyin-public.json'): Promise<NonNullable<SocialSyncInput['douyin']>> {
+  let handle;
+  try {
+    handle = await open(file, 'r');
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > 32 * 1024) return { status: 'failed', reason: 'invalid-response' };
+    const buffer = Buffer.alloc(32 * 1024 + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > 32 * 1024) return { status: 'failed', reason: 'invalid-response' };
+    return douyinCapture(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, bytesRead))));
+  } catch { return { status: 'failed', reason: 'unavailable' }; }
+  finally { await handle?.close(); }
+}
 
 export async function requestJson(url: string, options: RequestInit = {}, maximum = 128 * 1024, fetcher: Fetcher = fetch): Promise<{ data: unknown; headers: Headers }> {
   const signal = AbortSignal.timeout(15_000);
@@ -162,10 +215,12 @@ export async function oidcToken(environment: Environment, fetcher: Fetcher = fet
   return token;
 }
 
-export async function syncPublicData(environment: Environment = process.env, fetcher: Fetcher = fetch): Promise<void> {
+export interface SyncOptions { phase?: 'claim' | 'import'; claimId?: string; douyin?: unknown }
+export async function syncPublicData(environment: Environment = process.env, fetcher: Fetcher = fetch, options: SyncOptions = {}): Promise<string | undefined> {
   // Fixed stage names and HTTP status only: never log request URLs, headers, tokens or response bodies.
   let stage = 'claim-identity';
   try {
+    if (options.phase === 'import' && (!options.claimId || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(options.claimId))) throw new SyncError('invalid-response');
     const claimToken = await oidcToken(environment, fetcher);
     // Diagnostic booleans are not authorization; the server independently verifies the signature and every claim.
     try {
@@ -189,12 +244,18 @@ export async function syncPublicData(environment: Environment = process.env, fet
       } }));
     } catch { console.log('Identity diagnostic unavailable.'); }
     stage = 'claim';
-    const claimResponse = await requestJson(`${ORIGIN}/api/v1/internal/social-sync/claim`, { method: 'POST', headers: { authorization: `Bearer ${claimToken}` } }, 32 * 1024, fetcher);
+    const claimResponse = options.phase === 'import' ? { data: { data: { accepted: true, claimId: options.claimId } } } : await requestJson(`${ORIGIN}/api/v1/internal/social-sync/claim`, { method: 'POST', headers: { authorization: `Bearer ${claimToken}` } }, 32 * 1024, fetcher);
     const claim = record(record(claimResponse.data)?.data);
     if (claim?.accepted === false) { console.log('Public social refresh already claimed this hour; skipped.'); return; }
     if (claim?.accepted !== true || typeof claim.claimId !== 'string' || !/^[a-f0-9-]{36}$/u.test(claim.claimId)) throw new SyncError('invalid-response');
+    if (options.phase === 'claim') return claim.claimId;
     stage = 'public-sources';
     const collected = await collectSources(fetcher);
+    if (options.douyin !== undefined) {
+      const captured = douyinCapture(options.douyin);
+      collected.input.douyin = captured;
+      if (captured.status === 'ok' && captured.profile.works === undefined) collected.warnings.push('douyin-works:unavailable');
+    }
     stage = 'import-identity';
     const importToken = await oidcToken(environment, fetcher);
     stage = 'import';
@@ -204,10 +265,11 @@ export async function syncPublicData(environment: Environment = process.env, fet
     }, 32 * 1024, fetcher);
     if (record(record(imported.data)?.data)?.imported !== true) throw new SyncError('invalid-response');
     for (const [platform, result] of Object.entries(collected.input)) {
+      if (!result) continue;
       console.log(JSON.stringify({ platform, status: result.status, ...(result.status === 'ok' ? { capturedAt: result.profile.updatedAt } : { reason: result.reason }) }));
     }
     for (const warning of collected.warnings) console.warn(warning);
-    if (collected.warnings.length || Object.values(collected.input).some(result => result.status === 'failed')) process.exitCode = 1;
+    if (collected.warnings.length || Object.values(collected.input).some(result => result?.status === 'failed')) process.exitCode = 1;
     } catch (error) {
     console.error(JSON.stringify({ stage, reason: reason(error), ...(error instanceof SyncError && error.status ? { status: error.status } : {}), ...(error instanceof SyncError && error.diagnostic ? { diagnostic: error.diagnostic } : {}) }));
     throw error;
@@ -215,5 +277,15 @@ export async function syncPublicData(environment: Environment = process.env, fet
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  syncPublicData().catch(error => { console.error(`Public social synchronization failed: ${reason(error)}`); process.exitCode = 1; });
+  (async () => {
+    const phase = process.argv[2];
+    if (phase === '--claim') {
+      const claimId = await syncPublicData(process.env, fetch, { phase: 'claim' });
+      if (!process.env.GITHUB_OUTPUT) throw new SyncError('unavailable');
+      await appendFile(process.env.GITHUB_OUTPUT, `accepted=${Boolean(claimId)}\nclaim_id=${claimId || ''}\n`);
+    } else if (phase === '--import') {
+      await syncPublicData(process.env, fetch, { phase: 'import', claimId: process.env.SOCIAL_SYNC_CLAIM_ID, douyin: await readDouyinCapture() });
+    } else if (phase === undefined) await syncPublicData();
+    else throw new SyncError('invalid-response');
+  })().catch(error => { console.error(`Public social synchronization failed: ${reason(error)}`); process.exitCode = 1; });
 }
