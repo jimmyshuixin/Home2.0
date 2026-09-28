@@ -1,0 +1,23 @@
+# Exact environment from successful anonymous cloud probe 36326622716 attempt 2.
+# DTK is separately checked out at d21b92ec28e481795f4c8530ee6dc0f7d40da69d.
+# Browser binary: CLOAKBROWSER_VERSION=146.0.7680.177.5; AUTO_UPDATE=false.
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
+cffi==2.1.1
+cloakbrowser @ git+https://github.com/CloakHQ/cloakbrowser@f04c23da285b3b3d3cf10c8f9d282e7adc1d52ce
+cryptography==50.0.1
+greenlet==3.5.6
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+playwright==1.63.0
+pycparser==3.0
+pydantic==2.13.5
+pydantic-core==2.46.5
+pyee==13.0.1
+structlog==26.1.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+wreq==0.12.1

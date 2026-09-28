@@ -9,15 +9,110 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  synchronize:
+  claim:
     if: github.repository == 'jimmyshuixin/Home2.0' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      accepted: ${{ steps.claim.outputs.accepted }}
+      claim_id: ${{ steps.claim.outputs.claim_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout: scripts/v3/public-social-sync.ts
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.2'
+          package-manager-cache: false
+      - name: Claim the bounded hourly refresh before collecting data
+        id: claim
+        run: node --experimental-strip-types scripts/v3/public-social-sync.ts --claim
+
+  douyin:
+    needs: claim
+    if: needs.claim.outputs.accepted == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     permissions:
       contents: read
+    env:
+      DTK_REVISION: d21b92ec28e481795f4c8530ee6dc0f7d40da69d
+      CLOAKBROWSER_VERSION: 146.0.7680.177.5
+      CLOAKBROWSER_AUTO_UPDATE: 'false'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/v3/douyin-public-collector.py
+            scripts/v3/douyin-public-requirements.txt
+          sparse-checkout-cone-mode: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: '0.12.15'
+          enable-cache: false
+      - name: Fetch the reviewed upstream version
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          git init "$RUNNER_TEMP/dtk-v5"
+          git -C "$RUNNER_TEMP/dtk-v5" remote add origin https://github.com/Evil0ctal/Douyin_TikTok_Download_API.git
+          git -C "$RUNNER_TEMP/dtk-v5" fetch --depth 1 origin "$DTK_REVISION"
+          git -C "$RUNNER_TEMP/dtk-v5" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/dtk-v5" rev-parse HEAD)" = "$DTK_REVISION"
+      - name: Install the pinned anonymous collector runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv --python 3.12 "$RUNNER_TEMP/douyin-venv"
+          uv pip install --python "$RUNNER_TEMP/douyin-venv/bin/python" -r scripts/v3/douyin-public-requirements.txt
+          "$RUNNER_TEMP/douyin-venv/bin/python" -m playwright install-deps chromium
+          "$RUNNER_TEMP/douyin-venv/bin/python" -m cloakbrowser install
+      - name: Collect one anonymous profile and one page of public works
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONPATH="$RUNNER_TEMP/dtk-v5/src:$RUNNER_TEMP/dtk-v5/docker"
+          timeout 240 "$RUNNER_TEMP/douyin-venv/bin/python" scripts/v3/douyin-public-collector.py
+        # Separate runner: no OIDC permission, website token, login cookie or deployment authority.
+      - name: Pass only sanitized public metadata to the trusted importer
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: douyin-public-data
+          path: output/douyin-public.json
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Preserve bounded diagnostics for failed synchronization
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: douyin-public-diagnostics
+          path: output/douyin-public-diagnostics.json
+          if-no-files-found: ignore
+          retention-days: 2
+
+  synchronize:
+    needs: [claim, douyin]
+    if: always() && needs.claim.result == 'success' && needs.claim.outputs.accepted == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
       id-token: write
     steps:
-      - name: Check out exact trusted workflow revision
+      - name: Check out the exact trusted workflow revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -25,13 +120,20 @@ jobs:
           fetch-depth: 1
           sparse-checkout: scripts/v3/public-social-sync.ts
           sparse-checkout-cone-mode: false
-      - name: Use the supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.23.2'
           package-manager-cache: false
-      - name: Import anonymously captured public data
-        run: node --experimental-strip-types scripts/v3/public-social-sync.ts
-      # The existing Cloudflare Worker dispatches this hourly at minute 17.
+      - name: Read this run's public metadata if collection succeeded
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: douyin-public-data
+          path: output
+      - name: Update all available platforms and retain each failed source
+        env:
+          SOCIAL_SYNC_CLAIM_ID: ${{ needs.claim.outputs.claim_id }}
+        run: node --experimental-strip-types scripts/v3/public-social-sync.ts --import
+      # The existing Cloudflare Worker dispatches this at minute 17 each hour.
       # No native schedule: public-repository inactivity must not disable synchronization.
-      # No npm install, platform account credentials, repository writes or website builds.
+      # The importer executes no artifact code or collector dependencies, and writes no repository content.
