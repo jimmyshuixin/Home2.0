@@ -1,8 +1,9 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { createApi } from '../src/app';
 import type { AuthProvider } from '../src/auth';
-import { emptySnapshot } from '../src/releases';
+import { emptySnapshot, Releases } from '../src/releases';
+import type { PublicReadCache } from '../src/public-read-cache';
 import { SqliteStore } from '../src/store/sqlite';
 import type { CommentCatalogState } from '../src/store/public-comments';
 
@@ -24,7 +25,7 @@ beforeEach(async () => {
     for (let i = 0; i < 30; i++) { const id = `z${String(i).padStart(3, '0')}`, row = { id, nickname: '首页访客', body: '首页留言', targetType: 'guestbook', targetId: null, status: 'approved', version: 1, createdAt: at, updatedAt: at }; tx.put(`comments/${id}`, row); tx.put(`public_comments/${id}`, row); }
   });
 });
-afterEach(async () => { await store.close(); });
+afterEach(async () => { vi.restoreAllMocks(); await store.close(); });
 afterAll(async () => { await mf?.dispose(); });
 
 function request(path: string, options: { method?: string; body?: unknown; admin?: boolean; csrf?: boolean; origin?: string } = {}) {
@@ -40,6 +41,64 @@ async function migrate() {
 }
 
 describe('createApi comment routes with SQLite and local workerd R2', () => {
+  it('serves guestbook comments without a content snapshot dependency while retaining release and preview guards', async () => {
+    await migrate();
+    const snapshot = vi.spyOn(Releases.prototype, 'snapshot').mockRejectedValue(new Error('snapshot temporarily unavailable'));
+    const result = await request('/comments?limit=12');
+    expect(result.status).toBe(200);
+    expect(await result.json()).toMatchObject({ data: expect.any(Array), meta: { releaseId: 'comments-release', catalogReady: true } });
+    expect(snapshot).not.toHaveBeenCalled();
+    const changed = await api.app.request(`${origin}/api/v1/comments`, { headers: { 'x-xvyin-release': 'stale-release' } });
+    expect(changed.status).toBe(409); expect(await changed.json()).toMatchObject({ error: { code: 'RELEASE_CHANGED' } });
+    const unauthenticated = await api.app.request(`${origin}/api/v1/comments`, { headers: { cookie: '__Host-xvyin_preview=private-comments' } });
+    expect(unauthenticated.status).toBe(401);
+    await store.transaction(async tx => { tx.put('releases/private-comments', { id: 'private-comments', status: 'building' }); });
+    const headers = { cookie: `${cookie}; __Host-xvyin_preview=private-comments` };
+    expect((await api.app.request(`${origin}/api/v1/comments`, { headers })).status).toBe(409);
+    await store.transaction(async tx => { tx.put('releases/private-comments', { id: 'private-comments', status: 'ready' }); });
+    const preview = await api.app.request(`${origin}/api/v1/comments?limit=1`, { headers });
+    expect(preview.status).toBe(200); expect(preview.headers.get('cache-control')).toBe('no-store');
+    expect(await preview.json()).toMatchObject({ meta: { releaseId: 'private-comments' } });
+    expect(snapshot).not.toHaveBeenCalled();
+  });
+
+  it('reuses the published target section without caching comments, stale release pointers or private preview targets', async () => {
+    await migrate();
+    const storage = await mf.getCaches(), cache = await storage.open(`comment-target-${crypto.randomUUID()}`);
+    let writes = 0;
+    const publicReadCache: PublicReadCache = { origin, cache: {
+      match: (async (...args: Parameters<Cache['match']>) => {
+        const hit = await cache.match(...args as Parameters<typeof cache.match>);
+        return hit && new Response(await hit.arrayBuffer(), { status: hit.status, headers: hit.headers });
+      }) as Cache['match'],
+      put: (async (...args: Parameters<Cache['put']>) => { writes++; return cache.put(...args as unknown as Parameters<typeof cache.put>); }) as Cache['put'],
+    } };
+    api = createApi({ store, bucket, auth, now: () => now, secureCookies: true, allowedOrigins: [origin], privacySalt: 'test-only-salt-'.repeat(4), adminUsername: 'admin', codeSha: 'a'.repeat(40), publicReadCache });
+    const snapshot = vi.spyOn(Releases.prototype, 'snapshot');
+    for (let i = 0; i < 2; i++) expect((await request('/comments?targetType=album&targetId=album-one&limit=1')).status).toBe(200);
+    expect(snapshot).toHaveBeenCalledTimes(1); expect(writes).toBe(1);
+    // Even a warm target section must not keep a newly hidden comment visible.
+    await store.transaction(async tx => { tx.delete('public_comment_catalog/a054'); });
+    const hidden = await request('/comments?targetType=album&targetId=album-one&limit=1');
+    expect(await hidden.json()).toMatchObject({ data: [{ id: 'a053' }] });
+    expect(snapshot).toHaveBeenCalledTimes(1); expect(writes).toBe(1);
+    await store.transaction(async tx => { tx.put('releases/private-targets', { id: 'private-targets', status: 'ready' }); });
+    await bucket.put('private-snapshots/private-targets.json', JSON.stringify({ ...emptySnapshot('private-targets'), albums: [{ id: 'private-album' }] }));
+    const headers = { cookie: `${cookie}; __Host-xvyin_preview=private-targets` };
+    expect((await api.app.request(`${origin}/api/v1/comments?targetType=album&targetId=album-one`, { headers })).status).toBe(404);
+    const preview = await api.app.request(`${origin}/api/v1/comments?targetType=album&targetId=private-album`, { headers });
+    expect(preview.status).toBe(200); expect(await preview.json()).toMatchObject({ data: [], meta: { releaseId: 'private-targets' } });
+    expect(writes).toBe(1);
+    await bucket.put('active-release.json', JSON.stringify({ schemaVersion: 1, releaseId: 'next-comments' }));
+    await bucket.put('private-snapshots/next-comments.json', JSON.stringify(emptySnapshot('next-comments')));
+    try {
+      expect((await request('/comments?targetType=album&targetId=album-one')).status).toBe(404);
+      const guestbook = await request('/comments?limit=1');
+      expect(await guestbook.json()).toMatchObject({ meta: { releaseId: 'next-comments' } });
+      expect((await request('/comments?targetType=creation&targetId=creation-one')).status).toBe(404);
+    } finally { await bucket.put('active-release.json', JSON.stringify({ schemaVersion: 1, releaseId: 'comments-release' })); }
+  });
+
   it('protects migration reads and writes with admin auth, CSRF, Origin and strict request input', async () => {
     expect((await request('/admin/comments/catalog')).status).toBe(401);
     expect((await request('/admin/comments/catalog/advance', { method: 'POST', body: {} })).status).toBe(401);

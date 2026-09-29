@@ -59,12 +59,16 @@ export function createApi(runtime: Runtime) {
   const input = async (request: Request, max?: number) => { const value = await boundedJson(request, max); const problem = boundedTreeProblem(value, 24, 15000); assert(!problem, 'INVALID_CONTENT_TREE', 422, problem || '内容结构无效'); return value; };
   const ip = (request: Request) => request.headers.get('cf-connecting-ip') || 'local';
   const limit = (request: Request, scope: string, count: number, window = 60_000) => rateLimit(runtime.store, scope, ip(request), count, window, runtime.now(), runtime.privacySalt);
-  const currentSnapshot = async (request: Request, requestId: string) => {
+  const currentRelease = async (request: Request) => {
     const previewId = cookieValue(request, previewCookie);
-    if (previewId) { await sessions.require(request); const job = await releases.get(previewId); assert(['ready', 'live', 'superseded'].includes(job.status), 'PREVIEW_NOT_READY', 409, '预览尚未就绪'); return releases.snapshot(previewId); }
+    if (previewId) { await sessions.require(request); const job = await releases.get(previewId); assert(['ready', 'live', 'superseded'].includes(job.status), 'PREVIEW_NOT_READY', 409, '预览尚未就绪'); return { releaseId: previewId, privateView: true }; }
     const active = await releases.active(), wanted = request.headers.get('x-xvyin-release');
     assert(!wanted || wanted === 'unpublished' || wanted === active?.value.releaseId, 'RELEASE_CHANGED', 409, '网站已更新，请刷新页面');
-    return active ? releases.snapshot(active.value.releaseId) : emptySnapshot('unpublished');
+    return { releaseId: active?.value.releaseId ?? null, privateView: false };
+  };
+  const currentSnapshot = async (request: Request, requestId: string) => {
+    const { releaseId } = await currentRelease(request);
+    return releaseId ? releases.snapshot(releaseId) : emptySnapshot('unpublished');
   };
   const publicRecordState = async (collection: string, values: DraftRecord[]) => {
     const active = await releases.active(), snapshot = active ? await releases.snapshot(active.value.releaseId) : emptySnapshot('unpublished');
@@ -75,12 +79,9 @@ export function createApi(runtime: Runtime) {
     });
   };
   const currentSection = async <K extends PublishedSection>(request: Request, requestId: string, section: K) => {
-    if (cookieValue(request, previewCookie)) { const snapshot = await currentSnapshot(request, requestId); return { releaseId: snapshot.releaseId, value: snapshot[section] }; }
-    const active = await releases.active(), wanted = request.headers.get('x-xvyin-release');
-    assert(!wanted || wanted === 'unpublished' || wanted === active?.value.releaseId, 'RELEASE_CHANGED', 409, '网站已更新，请刷新页面');
-    if (!active) return { releaseId: 'unpublished', value: emptySnapshot('unpublished')[section] };
-    const releaseId = active.value.releaseId;
-    return { releaseId, value: await cachePublishedSection(runtime.publicReadCache, releaseId, section, () => releases.snapshot(releaseId)) };
+    const { releaseId, privateView } = await currentRelease(request);
+    if (!releaseId) return { releaseId: 'unpublished', value: emptySnapshot('unpublished')[section] };
+    return { releaseId, value: await cachePublishedSection(privateView ? undefined : runtime.publicReadCache, releaseId, section, () => releases.snapshot(releaseId)) };
   };
   app.use('*', async (c, next) => {
     const requestId = crypto.randomUUID(); c.set('requestId', requestId);
@@ -248,10 +249,18 @@ export function createApi(runtime: Runtime) {
   });
   app.get('/api/v1/comments', async c => {
     const targetType = z.enum(['guestbook', 'creation', 'album']).parse(c.req.query('targetType') || 'guestbook'), targetId = c.req.query('targetId') || null;
-    const snapshot = await currentSnapshot(c.req.raw, c.get('requestId'));
-    if (targetType !== 'guestbook') assert((targetType === 'creation' ? snapshot.creations : snapshot.albums).some(v => v.id === targetId), 'NOT_FOUND', 404, '公开内容不存在');
+    // Guestbook comments only need the authorized release marker, not the full
+    // content snapshot. Targeted comments reuse the immutable section cache;
+    // the moderated comment rows themselves are always read live.
+    let releaseId: string;
+    if (targetType === 'guestbook') releaseId = (await currentRelease(c.req.raw)).releaseId ?? 'unpublished';
+    else {
+      const section = await currentSection(c.req.raw, c.get('requestId'), targetType === 'creation' ? 'creations' : 'albums');
+      assert(section.value.some(v => v.id === targetId), 'NOT_FOUND', 404, '公开内容不存在');
+      releaseId = section.releaseId;
+    }
     const page = await publicComments.list({ targetType, targetId, limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')), cursor: c.req.query('cursor') });
-    return response(page.items, c.get('requestId'), { nextCursor: page.nextCursor, catalogReady: page.catalogReady, releaseId: snapshot.releaseId });
+    return response(page.items, c.get('requestId'), { nextCursor: page.nextCursor, catalogReady: page.catalogReady, releaseId });
   });
   for (const kind of ['comment', 'contact']) app.post(`/api/v1/${kind === 'comment' ? 'comments' : 'contact'}`, async c => {
     await limit(c.req.raw, kind, 5, 10 * 60_000); const values = (kind === 'comment' ? CommentInputSchema : ContactInputSchema).parse(await input(c.req.raw, 24_000));

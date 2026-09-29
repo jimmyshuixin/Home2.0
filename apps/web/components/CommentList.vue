@@ -14,6 +14,8 @@ const animated = computed(() => props.compact && enabled.value && !reducedMotion
 let motion: MediaQueryList | undefined
 let resizeObserver: ResizeObserver | undefined
 let disposed = false
+let request: AbortController | undefined
+let failedMore = false
 
 function updateMotion() { reducedMotion.value = !!motion?.matches }
 function updateVisibility() { pageVisible.value = !document.hidden }
@@ -39,19 +41,34 @@ async function observeLanes() {
 watch([animated, lanes, comments], () => { void observeLanes() })
 
 async function load(more = false) {
+  if (disposed || request) return
+  const controller = new AbortController()
+  request = controller
   loading.value = true; error.value = ''
   try {
     const params = new URLSearchParams({ targetType: props.targetType, limit: props.compact ? '12' : '20' })
     if (props.targetType !== 'guestbook') params.set('targetId', props.targetId)
     if (more && cursor.value) params.set('cursor', cursor.value)
-    const response = await api<Comment[]>(`/comments?${params}`)
+    const response = await api<Comment[]>(`/comments?${params}`, { signal: controller.signal })
+    if (disposed || request !== controller) return
     comments.value = more ? [...comments.value, ...response.data] : response.data
     laneLoops.value = []
     cursor.value = response.meta.nextCursor || null
     catalogReady.value = response.meta.catalogReady !== false
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '留言暂时无法加载。' }
-  finally { loading.value = false }
+  } catch (cause) {
+    if (!controller.signal.aborted && request === controller) {
+      failedMore = more
+      error.value = cause instanceof Error ? cause.message : '留言暂时无法加载。'
+    }
+  } finally {
+    if (request === controller) { request = undefined; loading.value = false }
+  }
 }
+watch([() => props.targetType, () => props.targetId], () => {
+  request?.abort(); request = undefined
+  comments.value = []; cursor.value = null; laneLoops.value = []; catalogReady.value = true
+  void load()
+})
 onMounted(() => {
   motion = window.matchMedia('(prefers-reduced-motion: reduce)')
   updateMotion(); updateVisibility()
@@ -61,6 +78,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  request?.abort()
   resizeObserver?.disconnect()
   motion?.removeEventListener('change', updateMotion)
   document.removeEventListener('visibilitychange', updateVisibility)
@@ -76,10 +94,10 @@ defineExpose({ load })
       <button class="quiet" :disabled="!enabled || reducedMotion" :aria-pressed="paused" @click="paused = !paused">{{ paused ? '继续' : '暂停' }}</button>
     </div>
     <div ref="viewport" :class="{ danmaku: compact, 'danmaku-animated': animated, 'danmaku-paused': paused || !pageVisible, 'danmaku-lanes': lanes }" :aria-live="animated && !paused ? 'off' : 'polite'">
+      <div v-if="error" class="feedback error" role="status"><p>{{ error }}</p><button :disabled="loading" @click="load(failedMore)">重试</button></div>
       <p v-if="loading && !comments.length" class="muted" role="status">正在加载留言…</p>
-      <div v-else-if="error" class="feedback error" role="status"><p>{{ error }}</p><button :disabled="loading" @click="load()">重试</button></div>
-      <p v-else-if="!comments.length" class="muted" role="status">{{ catalogReady ? '还没有公开留言，来留第一句话。' : '留言正在整理，稍后可查看完整列表。' }}</p>
-      <ul v-else-if="lanes && animated" class="danmaku-lane-list" aria-label="公开留言">
+      <p v-else-if="!comments.length && !error" class="muted" role="status">{{ catalogReady ? '还没有公开留言，来留第一句话。' : '留言正在整理，稍后可查看完整列表。' }}</p>
+      <ul v-else-if="comments.length && lanes && animated" class="danmaku-lane-list" aria-label="公开留言">
         <li v-for="(lane, laneIndex) in laneComments" :key="laneIndex" class="danmaku-lane">
           <div class="danmaku-track" :class="{ 'is-ready': laneLoops[laneIndex]?.cycleWidth }" :style="{ '--lane-duration': `${laneLoops[laneIndex]?.durationSeconds || 30}s` }">
             <div v-for="copy in 2" :key="copy" class="danmaku-cycle" :aria-hidden="copy === 2 ? 'true' : undefined">
@@ -90,12 +108,12 @@ defineExpose({ load })
           </div>
         </li>
       </ul>
-      <ul v-else :class="compact ? 'danmaku-list' : 'comment-list'">
+      <ul v-else-if="comments.length" :class="compact ? 'danmaku-list' : 'comment-list'">
         <li v-for="(comment, i) in comments" :key="comment.id" :style="compact && !lanes ? { '--track': i % 3, '--delay': `${Math.floor(i / 3) * 12 + (i % 3) * 4}s` } : undefined">
           <p>{{ comment.body }}</p><span class="small muted">{{ comment.nickname || '访客' }}</span>
         </li>
       </ul>
     </div>
-    <button v-if="cursor && !compact" :disabled="loading" @click="load(true)">{{ loading ? '正在加载…' : '加载更多留言' }}</button>
+    <button v-if="cursor && !compact && !error" :disabled="loading" @click="load(true)">{{ loading ? '正在加载…' : '加载更多留言' }}</button>
   </div>
 </template>
