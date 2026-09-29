@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { api, errorMessage, formatBytes, type MediaItem } from '../api';
-interface Job { id: string; assetId: string; status: string; processed: number; references: { kind: string; title: string }[]; totalKeys: number; completedKeys: number; bytes: number }
+interface Job { id: string; assetId: string; status: string; processed: number; references: { kind: string; title: string }[]; totalKeys: number; completedKeys: number; bytes: number; recovery?: boolean; reservedBytes?: number; totalUploads?: number; abortedUploads?: number }
 const props = defineProps<{ item?: MediaItem; resumeId?: string }>();
 const emit = defineEmits<{ close: []; changed: [] }>();
 const dialog = ref<HTMLDialogElement>(), job = ref<Job>(), busy = ref(false), error = ref(''), agreed = ref(false);
@@ -42,9 +42,9 @@ onBeforeUnmount(() => { alive = false; });
   <p v-if="!job" class="hint mt16">先检查引用，再由你确认删除。</p>
   <template v-else-if="job.status === 'checking'"><p class="mt16" role="status">正在检查草稿、公开内容和历史版本，已核对 {{ job.processed }} 条记录。</p><p class="hint mt8">检查期间暂缓内容保存与发布。关闭本窗口可取消检查。</p></template>
   <template v-else-if="job.status === 'blocked'"><p class="notice mt16">这份媒体仍被使用，已阻止永久删除。</p><ul class="references"><li v-for="(reference,index) in job.references" :key="index">{{ reference.title }}</li></ul><p class="hint">移入回收站不会破坏这些引用；可以恢复媒体。历史版本的引用也会保留。</p></template>
-  <template v-else-if="job.status === 'ready'"><p class="notice mt16">引用检查通过，可释放 {{ formatBytes(job.bytes) }}，包含原件和处理后的版本。</p><label class="confirm-check mt16"><input v-model="agreed" type="checkbox">我确认永久删除这些文件，删除后无法恢复。</label><button type="button" class="danger mt24" :disabled="busy || !agreed" @click="confirm">确认永久删除</button></template>
-  <template v-else-if="job.status === 'deleting'"><p class="mt16" role="status">正在删除文件：{{ job.completedKeys }} / {{ job.totalKeys }}</p><progress :max="job.totalKeys" :value="job.completedKeys" aria-label="永久删除进度"></progress><p class="hint">中断后可继续；全部对象删除成功后才会扣减已用容量。</p></template>
-  <p v-else-if="job.status === 'deleted'" class="notice mt16" role="status">已永久删除，释放 {{ formatBytes(job.bytes) }}。</p>
+  <template v-else-if="job.status === 'ready'"><p class="notice mt16">引用检查通过，可释放 {{ formatBytes(job.bytes) }} 已用容量<span v-if="job.reservedBytes">和 {{ formatBytes(job.reservedBytes) }} 处理预留</span>。</p><p v-if="job.recovery" class="hint mt16">将停止旧处理任务，清理失败文件及未完成上传。完成后，请从媒体库重新上传原文件。</p><label class="confirm-check mt16"><input v-model="agreed" type="checkbox">我确认永久删除这些文件，删除后无法恢复。</label><button type="button" class="danger mt24" :disabled="busy || !agreed" @click="confirm">{{ job.recovery ? '确认清理失败文件' : '确认永久删除' }}</button></template>
+  <template v-else-if="job.status === 'deleting'"><p v-if="job.recovery && (job.abortedUploads || 0) < (job.totalUploads || 0)" class="mt16" role="status">正在结束未完成上传：{{ job.abortedUploads || 0 }} / {{ job.totalUploads || 0 }}</p><p class="mt16" role="status">正在删除文件：{{ job.completedKeys }} / {{ job.totalKeys }}</p><progress :max="job.totalKeys" :value="job.completedKeys" aria-label="永久删除进度"></progress><p class="hint">中断后可继续；全部上传和文件确认清理完成后，才会释放已用容量及处理预留。</p></template>
+  <p v-else-if="job.status === 'deleted'" class="notice mt16" role="status">已永久删除，释放 {{ formatBytes(job.bytes + (job.reservedBytes || 0)) }}<span v-if="job.recovery">（含处理预留）。现在可以关闭窗口并重新上传原文件</span>。</p>
   <p v-else class="notice mt16">检查已取消或过期，请关闭后重新检查。</p>
   <p v-if="error" class="notice error mt16" role="alert">{{ error }}</p>
   <button v-if="job && ['checking','deleting'].includes(job.status)" type="button" class="mt24" :disabled="busy" @click="advance">{{ busy ? '正在处理…' : '继续处理' }}</button>

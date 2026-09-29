@@ -1,2 +1,2 @@
 import { defineConfig } from 'vitest/config';
-export default defineConfig({ test: { include: ['packages/**/test/**/*.test.ts', 'workers/**/test/**/*.test.ts', 'apps/**/tests/**/*.test.ts', 'scripts/**/test/**/*.test.ts'], testTimeout: 15000, fileParallelism: true } });
+export default defineConfig({ test: { include: ['packages/**/test/**/*.test.ts', 'workers/**/test/**/*.test.ts', 'apps/**/tests/**/*.test.ts', 'scripts/**/test/**/*.test.ts'], testTimeout: 15000, hookTimeout: 30000, fileParallelism: true, maxWorkers: 2 } });

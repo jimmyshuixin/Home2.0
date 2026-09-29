@@ -1,5 +1,31 @@
 # xvyin V3：从这里继续
 
+## 当前入口：2026-09-29
+
+当前生产网站是 `https://xvyin.com`。实际维护源码为 `aesthetic-2026-09-19/source`，生产构建入口使用 `codex/v3-production`；不要把外层设计工作区或以下 9 月 12 日快照当作当前检出或部署状态。
+
+本轮 [可靠性升级](RELIABILITY-20260929.md) 包含失败媒体的受控清理、评论有界索引迁移、后台编辑竞态修复、预览会话清理、依赖更新和 PR 检查。新代码通过验证并不代表网站已切换，仍须核对真实 Worker `BUILD_CODE_SHA`、Pages 部署和 active release，并完成私密预览、激活及匿名回读。
+
+当前本地检查命令（在完整源码根目录运行）：
+
+```powershell
+npm ci --ignore-scripts --no-audit --no-fund
+npm exec --workspace @xvyin/web -- nuxt prepare
+npm run check
+npm run test:unit
+npm run test:publication
+python -m unittest discover -s scripts/v3/test -p 'test_*.py'
+npm run build --workspace @xvyin/admin
+```
+
+`check` 覆盖后端、共享契约、执行器和两个前端；`test:publication` 执行真实本地静态生成、预览、激活和回滚，不能与同一检出的其他 Nuxt 构建并发执行。Node 使用 22.23.2，媒体测试需要 FFmpeg/ffprobe。`.github/workflows/v3-checks.yml` 的三个独立任务隔离生成目录且没有生产凭据；仓库分支保护须单独配置，工作流存在不等于已启用强制合并门禁。
+
+请在网页中交互登录管理员，再通过发布中心生成和激活候选；不导出或保留 Cookie、令牌、密码。公开页面重建应采用 `changes: []` 与 `rebuildPublished: true`，保留已公开数据。评论索引需在新版后台“评论审核”中推进到完成；失败媒体仍需逐项检查引用和明确确认清理。
+
+## 历史记录：2026-09-12
+
+以下保留首次实施时的上下文、地址与版本，不能作为当前生产状态或登录操作指引。
+
 > 2026-09-12 后续视觉修订在完整独立工作副本 `home2-v3-freepaper`、分支 `codex/ui-freepaper` 中进行，包含下述最新文案、枝叶与播放要求；该视觉分支尚未部署。下文首轮实施与云端状态属于历史记录，当前部署应另读实际交付记录并重新核验。
 
 更新于 2026-09-12，Asia/Shanghai。本分支交付目标是可维护的前后端分离项目。当前代码已经包含真实持久化、账号密码适配、媒体处理和内容发布链路；本地验证不能代替远端部署与生产验收。**本次指定发布地址为 `https://test.xvyin.com`，当前尚无成功部署证据。** 先读 [部署依赖与尚未完成的验收](DEPLOYMENT-READINESS.md)，再执行其中已具备前提的步骤。

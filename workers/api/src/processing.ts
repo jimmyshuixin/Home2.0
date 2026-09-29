@@ -16,6 +16,7 @@ export interface VariantTask extends ProcessingVariant {
   partSha256: string[]; multipartEtag: string;
   key: string; partSize: number; totalParts: number; state: 'planned' | 'uploading' | 'completing' | 'complete';
   r2UploadId?: string; initializing?: Lease; parts: ProcessingPart[]; leases: Record<string, Lease>;
+  initializationStarted?: boolean; initializationUncertain?: boolean; completionLease?: Lease;
   verified?: { proof: 'verified-parts-r2-order'; bytes: number; version: string; etag: string };
 }
 export interface ProcessingJob {
@@ -23,11 +24,15 @@ export interface ProcessingJob {
   originalVersion: string; originalEtag: string; metadata?: DetectedMediaMetadata; planHash?: string;
   reservedBytes: number; variants: VariantTask[]; createdAt: number; updatedAt: number;
   error?: { code: string; message: string };
+  cleanupId?: string; cleanedAt?: number;
 }
 const freshQuota = (): Quota => ({ usedBytes: 0, reservedBytes: 0, limitBytes: MEDIA_LIMITS.totalBytes });
 const active = (lease: Lease, now: number) => lease.expiresAt > now;
 function ids(assetId: string, runId: string) { IdSchema.parse(assetId); IdSchema.parse(runId); }
-function assertRun(job: ProcessingJob | null, runId: string): asserts job is ProcessingJob { assert(job && job.runId === runId, 'PROCESSING_RUN_MISMATCH', 409, '媒体处理任务不属于当前运行'); }
+function assertRun(job: ProcessingJob | null, runId: string): asserts job is ProcessingJob {
+  assert(job && job.runId === runId, 'PROCESSING_RUN_MISMATCH', 409, '媒体处理任务不属于当前运行');
+  assert(!job.cleanupId, 'PROCESSING_CLEANUP_STARTED', 409, '失败文件已进入清理，原处理任务不能继续；清理完成后请重新上传。');
+}
 function taskFor(job: ProcessingJob, role: Role): VariantTask { const task = job.variants.find(item => item.role === role); assert(task, 'VARIANT_NOT_PLANNED', 404, '此衍生文件不在处理计划内'); return task; }
 function replaceTask(job: ProcessingJob, task: VariantTask, now: number): ProcessingJob { return { ...job, updatedAt: now, variants: job.variants.map(item => item.role === task.role ? task : item) }; }
 function uploadDeclaration(asset: MediaAsset): UploadMetadata {
@@ -95,7 +100,7 @@ export class Processing {
       const metadata = plan.metadata;
       assert(metadata.kind === asset.kind && metadata.bytes === asset.originalBytes && metadata.detectedMime === asset.expectedMime && (!asset.expectedSha256 || metadata.sha256 === asset.expectedSha256), 'DETECTED_METADATA_MISMATCH', 422, '实际检测结果与上传声明不一致');
       assert(canReserveMediaBytes(quota.usedBytes, quota.reservedBytes, bytes), 'MEDIA_QUOTA_EXCEEDED', 409, '原文件、衍生版本与上传预留合计将超过 9 GB；另留 1 GB 给网站发布。');
-      const variants: VariantTask[] = plan.variants.map(item => ({ ...item, key: `variants/${assetId}/${runId}/${item.role}`, partSize: PART_SIZE, totalParts: Math.ceil(item.bytes / PART_SIZE), state: 'planned', parts: [], leases: {} }));
+      const variants: VariantTask[] = plan.variants.map(item => ({ ...item, key: `variants/${assetId}/${runId}/${item.role}`, partSize: PART_SIZE, totalParts: Math.ceil(item.bytes / PART_SIZE), state: 'planned', initializationStarted: false, parts: [], leases: {} }));
       tx.put('system/media_quota', { ...quota, limitBytes: MEDIA_LIMITS.totalBytes, reservedBytes: quota.reservedBytes + bytes });
       tx.put(`processing/${assetId}`, { ...job, state: 'planned', metadata, planHash, reservedBytes: bytes, variants, updatedAt: this.now() });
     });
@@ -109,11 +114,14 @@ export class Processing {
       if (task.r2UploadId) return null;
       assert(job.state === 'planned', 'MEDIA_STATE_CONFLICT', 409, '任务已结束');
       assert(!task.initializing || !active(task.initializing, this.now()), 'VARIANT_BUSY', 409, '衍生上传正在初始化');
-      tx.put(`processing/${assetId}`, replaceTask(job, { ...task, initializing: { token, expiresAt: this.now() + 120_000 } }, this.now())); return task;
+      assert(!task.initializationUncertain && !task.initializationStarted, 'VARIANT_INITIALIZATION_UNCERTAIN', 409, '上传初始化结果需要核对，暂时保留容量；请勿重复创建。');
+      tx.put(`processing/${assetId}`, replaceTask(job, { ...task, initializationStarted: true, initializing: { token, expiresAt: this.now() + 120_000 } }, this.now())); return task;
     });
     if (!task) return;
+    let knownUploadId: string | undefined;
     try {
       const multipart = await this.bucket.createMultipartUpload(task.key, { httpMetadata: { contentType: task.mime, ...(task.role === 'download' ? { contentDisposition: 'attachment' } : {}) }, customMetadata: { sha256: task.sha256, assetId, runId, role } });
+      knownUploadId = multipart.uploadId;
       await this.store.transaction(async tx => {
         const job = await tx.get<ProcessingJob>(`processing/${assetId}`); assertRun(job, runId); const current = taskFor(job, role);
         assert(job.state === 'planned' && current.initializing?.token === token, 'VARIANT_STATE_CONFLICT', 409, '初始化状态已改变');
@@ -121,8 +129,16 @@ export class Processing {
         tx.put(`processing/${assetId}`, replaceTask(job, { ...rest, state: 'uploading', r2UploadId: multipart.uploadId }, this.now()));
       });
     } catch (error) {
-      await this.store.transaction(async tx => { const job = await tx.get<ProcessingJob>(`processing/${assetId}`); assertRun(job, runId); const task = taskFor(job, role); if (task.initializing?.token === token) { const { initializing: _lease, ...rest } = task; tx.put(`processing/${assetId}`, replaceTask(job, rest, this.now())); } });
-      // An unacknowledged R2 multipart is retained for reconciliation; quota stays reserved.
+      // Never erase the only evidence of an ambiguous create. A known handle is
+      // retained even if publishing it lost its acknowledgement; unknown handles
+      // remain explicitly blocked for operator reconciliation, without re-create.
+      await this.store.transaction(async tx => {
+        const job = await tx.get<ProcessingJob>(`processing/${assetId}`); assertRun(job, runId); const current = taskFor(job, role);
+        if (current.initializing?.token === token) {
+          const { initializing: _lease, ...rest } = current;
+          tx.put(`processing/${assetId}`, replaceTask(job, { ...rest, ...(knownUploadId ? { r2UploadId: knownUploadId, state: 'uploading' as const } : { initializationUncertain: true }) }, this.now()));
+        }
+      }).catch(() => { /* Keep the persisted initializing marker if reconciliation also fails. */ });
       throw error;
     }
   }
@@ -164,37 +180,53 @@ export class Processing {
     }
   }
   async completeVariant(assetId: string, runId: string, roleInput: string) {
-    ids(assetId, runId); const role = MediaVariantRoleSchema.parse(roleInput);
+    ids(assetId, runId); const role = MediaVariantRoleSchema.parse(roleInput), token = crypto.randomUUID();
     const task = await this.store.transaction(async tx => {
       const job = await tx.get<ProcessingJob>(`processing/${assetId}`); assertRun(job, runId); const task = taskFor(job, role);
       if (task.state === 'complete') return task;
+      assert(!task.completionLease || !active(task.completionLease, this.now()), 'VARIANT_BUSY', 409, '衍生文件正在合并，请稍后重试');
       assert(job.state === 'planned' && ['uploading', 'completing'].includes(task.state) && task.r2UploadId, 'VARIANT_STATE_CONFLICT', 409, '衍生文件状态不允许合并');
       assert(task.parts.length === task.totalParts && task.parts.every((item, index) => item.partNumber === index + 1 && item.sha256 === task.partSha256[index] && item.bytes === Math.min(PART_SIZE, task.bytes - index * PART_SIZE)) && Object.keys(task.leases).length === 0, 'VARIANT_INCOMPLETE', 409, '仍有衍生分片尚未完成或未通过校验');
-      tx.put(`processing/${assetId}`, replaceTask(job, { ...task, state: 'completing' }, this.now())); return task;
+      tx.put(`processing/${assetId}`, replaceTask(job, { ...task, state: 'completing', completionLease: { token, expiresAt: this.now() + 120_000 } }, this.now())); return task;
     });
     if (task.state === 'complete') return this.publicVariant(task);
-    let head = await this.bucket.head(task.key);
-    if (!head) {
-      // The live R2 completion response can omit custom metadata. Verify a fresh
-      // HEAD of the persisted object, including when the completion reply is lost.
-      try { await this.bucket.resumeMultipartUpload(task.key, task.r2UploadId!).complete(task.parts.map(({ partNumber, etag }) => ({ partNumber, etag }))); }
-      catch (error) { head = await this.bucket.head(task.key); if (!head) throw error; }
-      head ||= await this.bucket.head(task.key);
+    try {
+      let head = await this.bucket.head(task.key);
+      if (!head) {
+        // The live R2 completion response can omit custom metadata. Verify a fresh
+        // HEAD of the persisted object, including when the completion reply is lost.
+        try { await this.bucket.resumeMultipartUpload(task.key, task.r2UploadId!).complete(task.parts.map(({ partNumber, etag }) => ({ partNumber, etag }))); }
+        catch (error) { head = await this.bucket.head(task.key); if (!head) throw error; }
+        head ||= await this.bucket.head(task.key);
+      }
+      assert(head, 'VARIANT_STATE_CONFLICT', 409, '合并后的衍生对象尚不可读取，请重试');
+      assert(head.size === task.bytes && head.customMetadata?.sha256 === task.sha256, 'VARIANT_SIZE_MISMATCH', 422, '合并后的衍生对象与计划不一致');
+      assert(head.etag === task.multipartEtag && head.customMetadata?.assetId === assetId && head.customMetadata?.runId === runId && head.customMetadata?.role === role, 'VARIANT_ETAG_MISMATCH', 409, 'R2 对象未按已验证分片顺序完成');
+      // Workers Free must not re-read/hash a complete 512 MB object here. Every
+      // bounded request has already checked its actual part SHA against the fixed
+      // authenticated runner plan. R2 assembles exactly those server-held ETags in
+      // order. The whole-file SHA is trusted runner metadata, not a Worker rehash.
+      const verified = { proof: 'verified-parts-r2-order' as const, bytes: head.size, version: head.version, etag: head.etag };
+      return await this.store.transaction(async tx => {
+        const job = await tx.get<ProcessingJob>(`processing/${assetId}`); assertRun(job, runId); const current = taskFor(job, role);
+        if (current.state === 'complete') return this.publicVariant(current);
+        assert(job.state === 'planned' && current.state === 'completing' && current.completionLease?.token === token, 'VARIANT_STATE_CONFLICT', 409, '验证期间任务状态发生变化');
+        const { completionLease: _lease, ...rest } = current;
+        const done: VariantTask = { ...rest, state: 'complete', verified }; tx.put(`processing/${assetId}`, replaceTask(job, done, this.now())); return this.publicVariant(done);
+      });
+    } finally {
+      // The invocation is no longer active, so its lease must not block the
+      // runner's short bounded retries. Cleanup still aborts the durable R2
+      // handle before deleting, including a remotely completed lost response.
+      await this.store.transaction(async tx => {
+        const job = await tx.get<ProcessingJob>(`processing/${assetId}`);
+        if (!job || job.runId !== runId || job.cleanupId) return;
+        const current = taskFor(job, role);
+        if (current.completionLease?.token !== token) return;
+        const { completionLease: _lease, ...rest } = current;
+        tx.put(`processing/${assetId}`, replaceTask(job, rest, this.now()));
+      }).catch(() => { /* Keep expiry-based recovery if releasing the lease also failed. */ });
     }
-    assert(head, 'VARIANT_STATE_CONFLICT', 409, '合并后的衍生对象尚不可读取，请重试');
-    assert(head.size === task.bytes && head.customMetadata?.sha256 === task.sha256, 'VARIANT_SIZE_MISMATCH', 422, '合并后的衍生对象与计划不一致');
-    assert(head.etag === task.multipartEtag && head.customMetadata?.assetId === assetId && head.customMetadata?.runId === runId && head.customMetadata?.role === role, 'VARIANT_ETAG_MISMATCH', 409, 'R2 对象未按已验证分片顺序完成');
-    // Workers Free must not re-read/hash a complete 512 MB object here. Every
-    // bounded request has already checked its actual part SHA against the fixed
-    // authenticated runner plan. R2 assembles exactly those server-held ETags in
-    // order. The whole-file SHA is trusted runner metadata, not a Worker rehash.
-    const verified = { proof: 'verified-parts-r2-order' as const, bytes: head.size, version: head.version, etag: head.etag };
-    return this.store.transaction(async tx => {
-      const job = await tx.get<ProcessingJob>(`processing/${assetId}`); assertRun(job, runId); const current = taskFor(job, role);
-      if (current.state === 'complete') return this.publicVariant(current);
-      assert(job.state === 'planned' && current.state === 'completing', 'VARIANT_STATE_CONFLICT', 409, '验证期间任务状态发生变化');
-      const done: VariantTask = { ...current, state: 'complete', verified }; tx.put(`processing/${assetId}`, replaceTask(job, done, this.now())); return this.publicVariant(done);
-    });
   }
   async finish(assetId: string, runId: string): Promise<MediaAsset> {
     const job = await this.get(assetId, runId);

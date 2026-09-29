@@ -7,7 +7,7 @@ interface UploadSession { uploadId: string; assetId: string; partSize: number; t
 export interface UploadRow {
   key: string; name: string; size: number; mime: string; sha256?: string; uploadId?: string; assetId?: string;
   initializing?: boolean; file?: File; sent: number; hashing: number; state: string; error: string;
-  result?: MediaItem; reused?: boolean; checks?: number; nextCheck?: number;
+  result?: MediaItem; reused?: boolean; checks?: number; nextCheck?: number; resumeWithQueue?: boolean;
 }
 const rows = ref<UploadRow[]>([]), running = ref(false), paused = ref(false), issue = ref('');
 const journalKey = 'xvyin-admin-upload-journal-v2', capacity = 100;
@@ -40,7 +40,7 @@ function initialize() {
 }
 async function transfer(row: UploadRow) {
   const file = row.file; if (!file) return;
-  activeController = new AbortController(); const signal = activeController.signal; row.error = '';
+  activeController = new AbortController(); const signal = activeController.signal; row.error = ''; row.resumeWithQueue = false;
   try {
     metadata(row); row.state = 'hashing'; row.hashing = 0;
     const digest = verified.get(file) || await hashUpload(file, signal, bytes => { row.hashing = bytes; });
@@ -77,7 +77,11 @@ async function transfer(row: UploadRow) {
     row.state = 'processing'; row.sent = row.size; row.file = undefined; row.nextCheck = 0; scheduleProcessing();
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) { paused.value = true; authBlocked = true; }
-    row.state = 'paused'; row.error = signal.aborted ? '上传已暂停，已确认分片会保留。' : errorMessage(error);
+    row.resumeWithQueue = signal.aborted || error instanceof ApiError && error.status === 401;
+    // Continue may be clicked before the aborted request settles. Let the
+    // existing drain loop resume it without starting another concurrent loop.
+    row.state = row.resumeWithQueue && !paused.value && !authBlocked ? 'queued' : 'paused';
+    row.error = row.state === 'queued' ? '' : signal.aborted ? '上传已暂停，已确认分片会保留。' : errorMessage(error);
   } finally { activeController = undefined; journal(); }
 }
 async function drain() {
@@ -136,7 +140,7 @@ async function resume(row: UploadRow, file?: File) {
     row.file = file;
   }
   if (!row.file) return;
-  row.state = 'queued'; row.error = ''; paused.value = false; authBlocked = false; journal(); scheduleProcessing(); void drain();
+  row.state = 'queued'; row.error = ''; row.resumeWithQueue = false; paused.value = false; authBlocked = false; journal(); scheduleProcessing(); void drain();
 }
 async function cancel(row: UploadRow) {
   if (['uploading', 'hashing', 'completing', 'processing'].includes(row.state)) return;
@@ -151,7 +155,13 @@ export function useUploadQueue() {
   initialize();
   return { rows, running, paused, issue, activeCount, capacity, add, resume, cancel,
     pause: () => { paused.value = true; activeController?.abort(); },
-    continue: () => { paused.value = false; authBlocked = false; scheduleProcessing(); void drain(); },
+    continue: () => {
+      paused.value = false; authBlocked = false;
+      for (const row of rows.value) if (row.state === 'paused' && row.resumeWithQueue && row.file) {
+        row.state = 'queued'; row.error = ''; row.resumeWithQueue = false;
+      }
+      journal(); scheduleProcessing(); void drain();
+    },
     refresh: async (row: UploadRow) => { authBlocked = false; row.checks = 0; await check(row); scheduleProcessing(); },
     clear: () => { rows.value = rows.value.filter(row => !terminal(row)); journal(); },
   };

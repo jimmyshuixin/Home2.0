@@ -1,5 +1,6 @@
 import { BufferedTransaction, deserializeJson, listOptions, makeCursor, SerialQueue, serializeJson, validateKey, validateKeys, type Store, type Transaction } from './types';
 import { mediaCursor, mediaQueryOptions, mediaSortValue, type MediaQueryOptions, type MediaQueryPage } from './media-query';
+import { PUBLIC_COMMENT_CATALOG, publicCommentCursor, publicCommentQueryOptions, publicCommentSortValue, type PublicComment, type PublicCommentQueryOptions, type PublicCommentQueryPage } from './public-comment-query';
 
 /** Unit-test adapter only. Production and local development must select persistent storage. */
 export class MemoryStore implements Store {
@@ -26,6 +27,18 @@ export class MemoryStore implements Store {
       }).filter(row => !after || (row.sortValue > after ? 1 : row.sortValue < after ? -1 : 0) * direction > 0)
         .sort((a, b) => (a.sortValue < b.sortValue ? -1 : a.sortValue > b.sortValue ? 1 : 0) * direction).slice(0, limit + 1);
       const items = rows.slice(0, limit); return { items, nextCursor: rows.length > limit ? mediaCursor(options, items.at(-1)!.sortValue) : null };
+    });
+  }
+  queryPublicComments(options: PublicCommentQueryOptions): Promise<PublicCommentQueryPage> {
+    const { limit, after, lower, upper } = publicCommentQueryOptions(options);
+    return this.#queue.run(() => {
+      const prefix = `${PUBLIC_COMMENT_CATALOG}/`;
+      const rows = [...this.#records.entries()].filter(([key]) => key.startsWith(prefix)).map(([key, payload]) => {
+        const data = deserializeJson<PublicComment>(payload); return { id: key.slice(prefix.length), data, sortValue: publicCommentSortValue(data) };
+      }).filter(row => row.sortValue >= lower && row.sortValue < upper && (!after || row.sortValue < after))
+        .sort((a, b) => a.sortValue < b.sortValue ? 1 : a.sortValue > b.sortValue ? -1 : 0).slice(0, limit + 1);
+      const items = rows.slice(0, limit);
+      return { items, nextCursor: rows.length > limit ? publicCommentCursor(options, items.at(-1)!.sortValue) : null };
     });
   }
   list<T>(collection: string, options?: { limit?: number; cursor?: string }): Promise<{ items: { id: string; data: T }[]; nextCursor: string | null }> {

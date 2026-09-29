@@ -1,6 +1,7 @@
 import { readBoundedJson, safeStoreExceptionName } from './google-oauth';
 import { BufferedTransaction, deserializeJson, listOptions, makeCursor, MAX_STORED_JSON_BYTES, StoreError, validateKey, validateKeys, type Store, type Transaction } from './types';
 import { mediaCursor, mediaQueryOptions, mediaSortValue, type MediaQueryOptions, type MediaQueryPage } from './media-query';
+import { PUBLIC_COMMENT_CATALOG, publicCommentCatalog, publicCommentCursor, publicCommentQueryOptions, publicCommentSortValue, type PublicComment, type PublicCommentQueryOptions, type PublicCommentQueryPage } from './public-comment-query';
 
 const FIRESTORE_ORIGIN = 'https://firestore.googleapis.com';
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
@@ -175,6 +176,35 @@ export class FirestoreStore implements Store {
     for (const row of rows) { if (previous && (options.direction === 'asc' ? row.sortValue <= previous : row.sortValue >= previous)) throw new StoreError('STORE_UNAVAILABLE'); previous = row.sortValue; }
     const items = rows.slice(0, limit); return { items, nextCursor: rows.length > limit ? mediaCursor(options, items.at(-1)!.sortValue) : null };
   }
+  async queryPublicComments(options: PublicCommentQueryOptions): Promise<PublicCommentQueryPage> {
+    const { limit, after, lower, upper } = publicCommentQueryOptions(options);
+    const result = await this.#request('runQuery', { structuredQuery: {
+      from: [{ collectionId: `${this.#prefix}${PUBLIC_COMMENT_CATALOG}` }],
+      where: { compositeFilter: { op: 'AND', filters: [
+        { fieldFilter: { field: { fieldPath: 'sort_target' }, op: 'GREATER_THAN_OR_EQUAL', value: { stringValue: lower } } },
+        { fieldFilter: { field: { fieldPath: 'sort_target' }, op: 'LESS_THAN', value: { stringValue: upper } } },
+      ] } },
+      orderBy: [{ field: { fieldPath: 'sort_target' }, direction: 'DESCENDING' }], limit: limit + 1,
+      ...(after ? { startAt: { values: [{ stringValue: after }], before: false } } : {}),
+    } }, 4 * 1024 * 1024);
+    if (!Array.isArray(result) || !result.every(isObject)) throw new StoreError('STORE_UNAVAILABLE');
+    const rows = result.filter(row => 'document' in row).map(row => {
+      if (!isObject(row.document) || typeof row.document.name !== 'string') throw new StoreError('STORE_UNAVAILABLE');
+      const prefix = `${this.#documents}/${this.#prefix}${PUBLIC_COMMENT_CATALOG}/`;
+      if (!row.document.name.startsWith(prefix)) throw new StoreError('STORE_UNAVAILABLE');
+      const id = row.document.name.slice(prefix.length); validateKey(`${PUBLIC_COMMENT_CATALOG}/${id}`);
+      const data = publicCommentCatalog(deserializeJson<unknown>(this.#payload(row.document, this.#name(`${PUBLIC_COMMENT_CATALOG}/${id}`))), id);
+      if (!data) throw new StoreError('STORE_UNAVAILABLE');
+      const sortValue = publicCommentSortValue(data), fields = row.document.fields;
+      if (!isObject(fields) || !isObject(fields.sort_target) || fields.sort_target.stringValue !== sortValue || sortValue < lower || sortValue >= upper) throw new StoreError('STORE_UNAVAILABLE');
+      return { id, data, sortValue };
+    });
+    if (rows.length > limit + 1) throw new StoreError('STORE_UNAVAILABLE');
+    let previous = after;
+    for (const row of rows) { if (previous && row.sortValue >= previous) throw new StoreError('STORE_UNAVAILABLE'); previous = row.sortValue; }
+    const items = rows.slice(0, limit);
+    return { items, nextCursor: rows.length > limit ? publicCommentCursor(options, items.at(-1)!.sortValue) : null };
+  }
   async transaction<T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
     let retryTransaction: string | undefined;
     for (let attempt = 0; attempt < this.#maxAttempts; attempt++) {
@@ -189,7 +219,7 @@ export class FirestoreStore implements Store {
         const result = await callback(tx);
         const writes = tx.finish().map(write => write.payload === null
           ? { delete: this.#name(write.key) }
-          : { update: { name: this.#name(write.key), fields: { schema_version: { integerValue: '1' }, record_json: { stringValue: write.payload }, ...(write.key.startsWith('media_catalog/') ? Object.fromEntries((['created', 'name', 'size'] as const).map(sort => [`sort_${sort}`, { stringValue: mediaSortValue(JSON.parse(write.payload!), sort) }])) : {}) } } });
+          : { update: { name: this.#name(write.key), fields: { schema_version: { integerValue: '1' }, record_json: { stringValue: write.payload }, ...(write.key.startsWith('media_catalog/') ? Object.fromEntries((['created', 'name', 'size'] as const).map(sort => [`sort_${sort}`, { stringValue: mediaSortValue(JSON.parse(write.payload!), sort) }])) : {}), ...(write.key.startsWith(`${PUBLIC_COMMENT_CATALOG}/`) ? { sort_target: { stringValue: publicCommentSortValue(JSON.parse(write.payload!) as PublicComment) } } : {}) } } });
         if (writes.length > 500) throw new StoreError('STORE_INVALID_VALUE');
         // A transport error here is ambiguous. Only an explicit ABORTED response is retried.
         const committed = await this.#request('commit', { writes, transaction }, 512 * 1024);

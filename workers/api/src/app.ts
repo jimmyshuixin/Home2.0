@@ -7,6 +7,7 @@ import { boundedJson, assertOrigin, cookieValue, rateLimit, sha256 } from './sec
 import { Sessions, type Session } from './sessions';
 import { Records, readStatistics, writeStatisticsDelta, type DraftRecord } from './records';
 import { StoreError, type Store } from './store/types';
+import { PublicComments } from './store/public-comments';
 import { Media, type MediaAsset } from './media';
 import { MediaLibrary, type PurgeJob } from './media-library';
 import type { PublicReadCache } from './public-read-cache';
@@ -42,12 +43,14 @@ const schemaFor = (name: string): z.ZodType => ({ creations: CreationDraftSchema
 export function createApi(runtime: Runtime) {
   const app = new Hono<Context>(), sessions = new Sessions(runtime.store, runtime.auth, runtime.secureCookies, runtime.now), records = new Records(runtime.store, runtime.now), media = new Media(runtime.store, runtime.bucket, runtime.now), releases = new Releases(runtime.store, runtime.bucket, runtime.now, runtime.codeSha);
   const previewCookie = runtime.secureCookies ? '__Host-xvyin_preview' : 'xvyin_local_preview';
+  const clearPreviewCookie = `${previewCookie}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${runtime.secureCookies ? '; Secure' : ''}`;
   const processing = new Processing(runtime.store, runtime.bucket, runtime.now);
   const photographyBackfill = new PhotographyBackfill(runtime.store, runtime.bucket, runtime.now);
   const library = new MediaLibrary(runtime.store, runtime.bucket, runtime.now);
   const engagement = new Engagement(runtime.store, runtime.privacySalt, runtime.now);
   const social = new SocialPublicSync(runtime.store, runtime.now, runtime.publicReadCache);
-  const publicPurge = ({ keys, ...job }: PurgeJob) => ({ ...job, totalKeys: keys.length });
+  const publicComments = new PublicComments(runtime.store);
+  const publicPurge = ({ keys, recovery, ...job }: PurgeJob) => ({ ...job, totalKeys: keys.length, reservedBytes: recovery?.reservedBytes || 0, recovery: !!recovery, totalUploads: recovery?.uploads.length || 0, abortedUploads: recovery?.abortedUploads || 0 });
   const response = (data: unknown, requestId: string, extra: Record<string, unknown> = {}, status = 200) => new Response(JSON.stringify({ data, meta: { requestId, schemaVersion: 1, ...extra } }), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
   const input = async (request: Request, max?: number) => { const value = await boundedJson(request, max); const problem = boundedTreeProblem(value, 24, 15000); assert(!problem, 'INVALID_CONTENT_TREE', 422, problem || '内容结构无效'); return value; };
   const ip = (request: Request) => request.headers.get('cf-connecting-ip') || 'local';
@@ -116,15 +119,15 @@ export function createApi(runtime: Runtime) {
     c.header('set-cookie', created.cookie); return c.json({ data: { username: runtime.adminUsername, csrfToken: created.session.csrfToken }, meta: { requestId: c.get('requestId'), schemaVersion: 1 } });
   });
   app.get('/api/v1/auth/session', async c => { const session = await sessions.require(c.req.raw); return response({ username: runtime.adminUsername, csrfToken: session.csrfToken, previewReleaseId: cookieValue(c.req.raw, previewCookie) }, c.get('requestId')); });
-  app.post('/api/v1/auth/logout', async c => { const session = await sessions.require(c.req.raw, true); c.header('set-cookie', await sessions.logout(session)); return c.json({ data: { loggedOut: true }, meta: { requestId: c.get('requestId'), schemaVersion: 1 } }); });
+  app.post('/api/v1/auth/logout', async c => { const session = await sessions.require(c.req.raw, true); c.header('set-cookie', await sessions.logout(session)); c.header('set-cookie', clearPreviewCookie, { append: true }); return c.json({ data: { loggedOut: true }, meta: { requestId: c.get('requestId'), schemaVersion: 1 } }); });
   app.post('/api/v1/auth/password', async c => {
     const session = await sessions.require(c.req.raw, true), values = z.object({ currentPassword: z.string().max(512), newPassword: z.string().max(512) }).strict().parse(await input(c.req.raw, 4096));
     await limit(c.req.raw, 'password', 5, 15 * 60_000);
     await runtime.auth.changePassword({ uid: session.uid, ...values }); await sessions.revokeAll(session.uid);
-    c.header('set-cookie', await sessions.logout(session)); return c.json({ data: { changed: true }, meta: { requestId: c.get('requestId'), schemaVersion: 1 } });
+    c.header('set-cookie', await sessions.logout(session)); c.header('set-cookie', clearPreviewCookie, { append: true }); return c.json({ data: { changed: true }, meta: { requestId: c.get('requestId'), schemaVersion: 1 } });
   });
   app.post('/api/v1/auth/reset/request', async c => { await limit(c.req.raw, 'password-reset', 3, 3600_000); const values = z.object({ username: z.string().min(1).max(128) }).strict().parse(await input(c.req.raw, 4096)); await runtime.auth.requestPasswordReset(values); return response({ accepted: true }, c.get('requestId')); });
-  app.post('/api/v1/auth/reset/confirm', async c => { await limit(c.req.raw, 'reset-confirm', 6, 15 * 60_000); const values = z.object({ code: z.string().min(1).max(4096), newPassword: z.string().max(512) }).strict().parse(await input(c.req.raw, 8192)); const result = await runtime.auth.confirmPasswordReset(values); await sessions.revokeAll(result.uid); return response({ changed: true }, c.get('requestId')); });
+  app.post('/api/v1/auth/reset/confirm', async c => { await limit(c.req.raw, 'reset-confirm', 6, 15 * 60_000); const values = z.object({ code: z.string().min(1).max(4096), newPassword: z.string().max(512) }).strict().parse(await input(c.req.raw, 8192)); const result = await runtime.auth.confirmPasswordReset(values); await sessions.revokeAll(result.uid); c.header('set-cookie', clearPreviewCookie, { append: true }); return c.json({ data: { changed: true }, meta: { requestId: c.get('requestId'), schemaVersion: 1 } }); });
   app.use('/api/v1/admin/*', async (c, next) => { c.set('session', await sessions.require(c.req.raw, !['GET', 'HEAD'].includes(c.req.method))); await next(); });
   for (const collection of ['creations', 'albums', 'fitness', 'playlists']) {
     app.get(`/api/v1/admin/${collection}`, async c => { const page = await runtime.store.list<DraftRecord>(collection, { limit: 50, cursor: c.req.query('cursor') }); return response(await publicRecordState(collection, page.items.map(item => item.data)), c.get('requestId'), { nextCursor: page.nextCursor }); });
@@ -209,8 +212,10 @@ export function createApi(runtime: Runtime) {
     c.header('set-cookie', `${previewCookie}=${job.id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=1800${runtime.secureCookies ? '; Secure' : ''}`);
     return c.json({ data: { previewUrl: '/', previewReleaseId: job.id }, meta: { requestId: c.get('requestId'), schemaVersion: 1 } });
   });
-  app.post('/api/v1/admin/preview/close', c => { c.header('set-cookie', `${previewCookie}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${runtime.secureCookies ? '; Secure' : ''}`); return c.json({ data: { closed: true }, meta: { requestId: c.get('requestId'), schemaVersion: 1 } }); });
+  app.post('/api/v1/admin/preview/close', c => { c.header('set-cookie', clearPreviewCookie); return c.json({ data: { closed: true }, meta: { requestId: c.get('requestId'), schemaVersion: 1 } }); });
   for (const collection of ['comments', 'contacts']) app.get(`/api/v1/admin/${collection}`, async c => { const page = await runtime.store.list(collection, { limit: 50, cursor: c.req.query('cursor') }); return response(page.items.map(item => item.data), c.get('requestId'), { nextCursor: page.nextCursor }); });
+  app.get('/api/v1/admin/comments/catalog', async c => response(await publicComments.catalogStatus(), c.get('requestId')));
+  app.post('/api/v1/admin/comments/catalog/advance', async c => { z.object({}).strict().parse(await input(c.req.raw, 1024)); return response(await publicComments.advanceCatalog(), c.get('requestId')); });
   app.patch('/api/v1/admin/comments/:id', async c => {
     const id = IdSchema.parse(c.req.param('id')), values = z.object({ status: z.enum(['approved', 'rejected', 'hidden']), expectedVersion: z.number().int().positive() }).strict().parse(await input(c.req.raw, 4096));
     const result = await runtime.store.transaction(async tx => {
@@ -227,8 +232,8 @@ export function createApi(runtime: Runtime) {
     const targetType = z.enum(['guestbook', 'creation', 'album']).parse(c.req.query('targetType') || 'guestbook'), targetId = c.req.query('targetId') || null;
     const snapshot = await currentSnapshot(c.req.raw, c.get('requestId'));
     if (targetType !== 'guestbook') assert((targetType === 'creation' ? snapshot.creations : snapshot.albums).some(v => v.id === targetId), 'NOT_FOUND', 404, '公开内容不存在');
-    const page = await runtime.store.list<CommentRecord>('public_comments', { limit: 50, cursor: c.req.query('cursor') });
-    return response(page.items.map(item => item.data).filter(v => v.targetType === targetType && v.targetId === targetId && v.status === 'approved').map(({ id, nickname, body, createdAt }) => ({ id, nickname, body, createdAt })), c.get('requestId'), { nextCursor: page.nextCursor, releaseId: snapshot.releaseId });
+    const page = await publicComments.list({ targetType, targetId, limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')), cursor: c.req.query('cursor') });
+    return response(page.items, c.get('requestId'), { nextCursor: page.nextCursor, catalogReady: page.catalogReady, releaseId: snapshot.releaseId });
   });
   for (const kind of ['comment', 'contact']) app.post(`/api/v1/${kind === 'comment' ? 'comments' : 'contact'}`, async c => {
     await limit(c.req.raw, kind, 5, 10 * 60_000); const values = (kind === 'comment' ? CommentInputSchema : ContactInputSchema).parse(await input(c.req.raw, 24_000));

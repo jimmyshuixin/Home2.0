@@ -56,4 +56,67 @@ describe('bounded shared upload queue', () => {
     const keys = queue.add(Array.from({ length: 105 }, (_, i) => file(`${i}.jpg`)));
     expect(keys).toHaveLength(100); expect(queue.rows.value).toHaveLength(100); expect(queue.issue.value).toContain('剩余 5'); expect(mock.hash).not.toHaveBeenCalled();
   });
+  it.each([false, true])('continues the interrupted file before the rest of the queue (immediate=%s)', async immediate => {
+    mock.hash.mockImplementationOnce((_file: File, signal: AbortSignal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new DOMException('Paused', 'AbortError')), { once: true });
+    }));
+    mock.request.mockResolvedValue({ data: media('existing') });
+    const { useUploadQueue } = await import('../src/useUploadQueue'); const queue = useUploadQueue();
+    queue.add([file('first.jpg'), file('second.jpg')]);
+    expect(queue.rows.value[0]?.state).toBe('hashing');
+    queue.pause();
+    if (!immediate) { await settle(); expect(queue.rows.value[0]?.state).toBe('paused'); }
+    queue.continue(); await settle();
+    expect(queue.rows.value.map(row => row.state)).toEqual(['ready', 'ready']);
+    expect(mock.hash.mock.calls.map(call => call[0].name)).toEqual(['first.jpg', 'first.jpg', 'second.jpg']);
+    expect(mock.request).toHaveBeenCalledTimes(2);
+    expect(queue.running.value).toBe(false);
+  });
+  it('retries the authentication-interrupted file after continuing, without retrying a file error', async () => {
+    const { ApiError } = await import('../src/api');
+    mock.hash.mockRejectedValueOnce(new Error('File cannot be read'));
+    mock.request.mockRejectedValueOnce(new ApiError(401, 'SESSION_EXPIRED', 'expired')).mockResolvedValue({ data: media('existing') });
+    const { useUploadQueue } = await import('../src/useUploadQueue'); const queue = useUploadQueue();
+    queue.add([file('broken.jpg'), file('auth.jpg'), file('next.jpg')]); await settle();
+    expect(queue.rows.value.map(row => row.state)).toEqual(['paused', 'paused', 'queued']);
+    queue.continue(); await settle();
+    expect(queue.rows.value.map(row => row.state)).toEqual(['paused', 'ready', 'ready']);
+    expect(queue.rows.value[0]?.error).toBe('File cannot be read');
+    expect(mock.hash.mock.calls.map(call => call[0].name)).toEqual(['broken.jpg', 'auth.jpg', 'next.jpg']);
+    expect(mock.request).toHaveBeenCalledTimes(3);
+  });
+  it('does not resume a persisted pause until the original file is selected again', async () => {
+    storage.set('xvyin-admin-upload-journal-v2', JSON.stringify([{ key: 'restored', name: 'photo.jpg', mime: 'image/jpeg', size: 5, sent: 0, hashing: 0, state: 'paused', resumeWithQueue: true }]));
+    const { useUploadQueue } = await import('../src/useUploadQueue'); const queue = useUploadQueue();
+    queue.continue(); await settle();
+    expect(queue.rows.value[0]?.state).toBe('paused');
+    expect(mock.hash).not.toHaveBeenCalled(); expect(mock.request).not.toHaveBeenCalled();
+  });
+  it('continues an interrupted multipart upload using its existing session and confirmed parts', async () => {
+    let secondPartAttempts = 0;
+    const session = { uploadId: 'upload-one', assetId: 'asset-one', state: 'uploading', partSize: 3, totalParts: 2, parts: [] };
+    mock.request.mockImplementation(async (path: string, options: { signal?: AbortSignal } = {}) => {
+      if (path.includes('/duplicates?')) return { data: null };
+      if (path === '/admin/media/uploads') return { data: session };
+      if (path === '/admin/media/uploads/upload-one') return { data: { ...session, parts: [{ partNumber: 1, bytes: 3 }] } };
+      if (path.endsWith('/parts/1')) return { data: { bytes: 3 } };
+      if (path.endsWith('/parts/2')) {
+        secondPartAttempts++;
+        if (secondPartAttempts === 1) return new Promise((_resolve, reject) => options.signal?.addEventListener('abort', () => reject(new DOMException('Paused', 'AbortError')), { once: true }));
+        return { data: { bytes: 2 } };
+      }
+      if (path.endsWith('/complete')) return { data: {} };
+      return { data: media('asset-one') };
+    });
+    const { useUploadQueue } = await import('../src/useUploadQueue'); const queue = useUploadQueue();
+    queue.add([file()]); await settle();
+    expect(queue.rows.value[0]?.sent).toBe(3);
+    queue.pause(); await settle(); queue.continue(); await settle();
+    expect(queue.rows.value[0]?.state).toBe('processing'); expect(queue.rows.value[0]?.sent).toBe(5);
+    expect(mock.request.mock.calls.filter(call => call[0].includes('/parts/')).map(call => call[0])).toEqual([
+      '/admin/media/uploads/upload-one/parts/1', '/admin/media/uploads/upload-one/parts/2', '/admin/media/uploads/upload-one/parts/2',
+    ]);
+    expect(mock.request.mock.calls.filter(call => call[0] === '/admin/media/uploads')).toHaveLength(1);
+    expect(mock.hash).toHaveBeenCalledTimes(1);
+  });
 });

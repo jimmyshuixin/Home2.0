@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { IdSchema, MEDIA_LIMITS, plainText, Sha256Schema } from '@xvyin/contracts';
+import { IdSchema, MEDIA_LIMITS, MediaVariantRoleSchema, plainText, Sha256Schema } from '@xvyin/contracts';
 import type { MediaAsset, Quota } from './media';
 import type { ProcessingJob } from './processing';
 import type { DraftRecord, Revision } from './records';
@@ -16,10 +16,16 @@ export type ManagedMedia = MediaAsset & { version: number; category: string; lif
 export interface CatalogState { ready: boolean; processed: number; cursor: string | null; version: number }
 export interface MediaListResult { items: ManagedMedia[]; nextCursor: string | null; scanned: number; catalogReady: boolean }
 export interface MediaReference { kind: 'draft' | 'settings' | 'revision' | 'release'; collection: string; id: string; title: string }
+interface FailedRecovery {
+  runId: string; fingerprint: string; reservedBytes: number; originalVersion: string; originalEtag: string;
+  variants: Array<{ key: string; bytes: number; sha256: string; multipartEtag: string; role: string }>;
+  uploads: Array<{ key: string; uploadId: string }>; abortedUploads: number;
+}
 export interface PurgeJob {
   id: string; assetId: string; authorUid: string; status: 'checking' | 'blocked' | 'ready' | 'deleting' | 'deleted' | 'cancelled' | 'expired';
   expectedVersion: number; phase: number; cursor: string | null; processed: number; references: MediaReference[];
   keys: string[]; completedKeys: number; bytes: number; expiresAt: number; createdAt: string; updatedAt: string;
+  recovery?: FailedRecovery;
 }
 const SCAN_COLLECTIONS = ['active_release', 'creations', 'albums', 'fitness', 'playlists', 'settings', 'revisions', 'releases'] as const;
 const versionInput = z.object({ expectedVersion: z.number().int().positive() }).strict();
@@ -32,6 +38,29 @@ function referenceTitle(value: unknown): string { const item = value && typeof v
 function sameVersion(asset: MediaAsset | null, expectedVersion: number): asserts asset is MediaAsset { assert(asset, 'NOT_FOUND', 404, '媒体不存在'); assert((asset.version || 1) === expectedVersion, 'VERSION_CONFLICT', 409, '媒体资料已改变，请刷新后重试'); }
 function activeFence(fence: MediaFence | null, now: number): boolean { return Boolean(fence?.taskId && (fence.expiresAt || 0) > now); }
 function checkOwnedFence(fence: MediaFence | null, job: PurgeJob, now: number): void { assert(job.expiresAt > now && activeFence(fence, now) && fence?.taskId === job.id, 'PURGE_CHECK_EXPIRED', 409, '删除检查已过期或被取消，请重新检查后再确认'); }
+async function failedRecovery(asset: MediaAsset, job: ProcessingJob, now: number): Promise<FailedRecovery> {
+  assert(asset.status === 'failed' && asset.variants.length === 0 && job.state === 'failed' && !job.cleanupId && IdSchema.safeParse(job.runId).success && job.assetId === asset.id,
+    'MEDIA_CLEANUP_REQUIRED', 409, '处理记录需要核对，暂时保留文件和容量。');
+  assert(Number.isSafeInteger(job.reservedBytes) && job.reservedBytes >= 0 && job.variants.length <= 7 && job.originalVersion && job.originalEtag,
+    'MEDIA_CLEANUP_REQUIRED', 409, '处理容量记录不完整，需要核对后再清理。');
+  const uploads: FailedRecovery['uploads'] = [], variants: FailedRecovery['variants'] = [];
+  for (const task of job.variants) {
+    assert(MediaVariantRoleSchema.safeParse(task.role).success && task.key === `variants/${asset.id}/${job.runId}/${task.role}` && Number.isSafeInteger(task.bytes) && task.bytes > 0 && Sha256Schema.safeParse(task.sha256).success && /^[a-f0-9]{32}-[1-9]\d?$/u.test(task.multipartEtag),
+      'MEDIA_KEY_INVALID', 409, '处理文件路径或校验记录需要核对，暂时保留文件和容量。');
+    assert(!task.initializing && !task.initializationUncertain && (task.r2UploadId || task.initializationStarted === false && task.state === 'planned' && task.parts.length === 0),
+      'MEDIA_MULTIPART_UNCONFIRMED', 409, '有上传初始化结果未能确认，暂不能自动清理或释放容量。请管理员核对存储中的分片上传；不要重复上传同一文件。');
+    assert(!Object.values(task.leases).some(lease => lease.expiresAt > now) && (!task.completionLease || task.completionLease.expiresAt <= now),
+      'MEDIA_PROCESSING_BUSY', 409, '旧任务仍有正在上传或合并的文件，请稍后重新检查；容量会继续保留。');
+    if (task.r2UploadId) {
+      assert(typeof task.r2UploadId === 'string' && task.r2UploadId.length <= 4096, 'MEDIA_CLEANUP_REQUIRED', 409, '分片上传记录无效，需要核对后清理。');
+      uploads.push({ key: task.key, uploadId: task.r2UploadId });
+    }
+    variants.push({ key: task.key, bytes: task.bytes, sha256: task.sha256, multipartEtag: task.multipartEtag, role: task.role });
+  }
+  assert(new Set(variants.map(variant => variant.key)).size === variants.length && variants.reduce((sum, variant) => sum + variant.bytes, 0) === job.reservedBytes,
+    'QUOTA_STATE_CONFLICT', 409, '处理预占与文件计划不一致，需要核对后清理。');
+  return { runId: job.runId, fingerprint: await sha256(JSON.stringify(job)), reservedBytes: job.reservedBytes, originalVersion: job.originalVersion, originalEtag: job.originalEtag, variants, uploads, abortedUploads: 0 };
+}
 
 /** The catalog is a private projection, updated atomically by every media put.
  * Old data is backfilled five records at a time; reads do not silently omit it. */
@@ -108,11 +137,12 @@ export class MediaLibrary {
       if (receipt) { assert(receipt.version === values.expectedVersion, 'IDEMPOTENCY_CONFLICT', 409, '同一删除请求不能更改媒体版本'); const existing = await tx.get<PurgeJob>(`media_purge_jobs/${receipt.jobId}`); assert(existing, 'PURGE_STATE_CONFLICT', 409, '删除任务需要核对'); return existing; }
       sameVersion(asset, values.expectedVersion); assert(asset.lifecycle === 'trash', 'MEDIA_NOT_TRASHED', 409, '请先将媒体移入回收站，再检查永久删除');
       assert(asset.status !== 'processing', 'MEDIA_BUSY', 409, '媒体正在处理，暂时不能永久删除');
-      assert(!processing || ['ready', 'failed'].includes(processing.state) && processing.reservedBytes === 0 && processing.variants.every(task => task.state === 'complete' && !task.initializing && !Object.keys(task.leases).length), 'MEDIA_CLEANUP_REQUIRED', 409, '此媒体仍有未释放的处理任务或容量预留，需要先完成处理清理；可继续保留在回收站。');
+      const recovery = processing?.state === 'failed' ? await failedRecovery(asset, processing, this.now()) : undefined;
+      assert(!processing || recovery || processing.state === 'ready' && processing.reservedBytes === 0 && processing.variants.every(task => task.state === 'complete' && !task.initializing && !Object.keys(task.leases).length), 'MEDIA_CLEANUP_REQUIRED', 409, '此媒体仍有未释放的处理任务或容量预留，需要先完成处理清理；可继续保留在回收站。');
       assert(!activeFence(fence, this.now()), 'MEDIA_CLEANUP_BUSY', 409, '另一个媒体正在进行删除检查，请先完成或取消它');
-      const keys = [...new Set([asset.originalKey, ...asset.variants.map(variant => variant.key)])];
+      const keys = [...new Set([asset.originalKey, ...asset.variants.map(variant => variant.key), ...(recovery?.variants.map(variant => variant.key) || [])])];
       assert(keys.length <= 21 && keys.every(key => key === `originals/${id}/source` || key.startsWith(`variants/${id}/`) && !key.includes('..')), 'MEDIA_KEY_INVALID', 409, '媒体对象路径需要核对');
-      const job: PurgeJob = { id: crypto.randomUUID(), assetId: id, authorUid: uid, status: 'checking', expectedVersion: values.expectedVersion, phase: 0, cursor: null, processed: 0, references: [], keys, completedKeys: 0, bytes: managed(asset).totalBytes, expiresAt: this.now() + 15 * 60_000, createdAt: at, updatedAt: at };
+      const job: PurgeJob = { id: crypto.randomUUID(), assetId: id, authorUid: uid, status: 'checking', expectedVersion: values.expectedVersion, phase: 0, cursor: null, processed: 0, references: [], keys, completedKeys: 0, bytes: managed(asset).totalBytes, ...(recovery ? { recovery } : {}), expiresAt: this.now() + 15 * 60_000, createdAt: at, updatedAt: at };
       assert(Number.isSafeInteger(job.bytes) && job.bytes >= 0, 'QUOTA_STATE_CONFLICT', 409, '媒体字节账目需要核对');
       tx.put(`media/${id}`, { ...asset, purgeJobId: job.id });
       tx.put(`media_purge_jobs/${job.id}`, job); tx.put(`media_purge_requests/${requestId}`, { jobId: job.id, version: values.expectedVersion }); tx.put(MEDIA_FENCE_KEY, { epoch: (fence?.epoch || 0) + 1, taskId: job.id, assetId: id, expiresAt: job.expiresAt }); return job;
@@ -184,28 +214,71 @@ export class MediaLibrary {
       assert(current?.status === 'ready', 'PURGE_NOT_READY', 409, '删除任务状态已改变'); checkOwnedFence(fence, current, this.now()); sameVersion(asset, current.expectedVersion);
       assert(asset.lifecycle === 'trash' && asset.status !== 'processing', 'MEDIA_STATE_CHANGED', 409, '媒体状态已改变');
       assert(quota && Number.isSafeInteger(quota.usedBytes) && quota.usedBytes >= current.bytes, 'QUOTA_STATE_CONFLICT', 409, '容量账目需要核对后才能永久删除');
+      const processing = current.recovery ? await tx.get<ProcessingJob>(`processing/${current.assetId}`) : null;
+      if (current.recovery) {
+        assert(processing && (await failedRecovery(asset, processing, this.now())).fingerprint === current.recovery.fingerprint, 'PROCESSING_CHANGED', 409, '检查期间处理记录已改变，请取消后重新检查。');
+        assert(Number.isSafeInteger(quota.reservedBytes) && quota.reservedBytes >= current.recovery.reservedBytes, 'QUOTA_STATE_CONFLICT', 409, '处理预占需要核对后才能清理。');
+      }
       const at = new Date(this.now()).toISOString(), next = { ...current, status: 'deleting' as const, updatedAt: at };
       tx.put(`media/${asset.id}`, { ...asset, lifecycle: 'purging', version: current.expectedVersion + 1, updatedAt: at }); tx.put(`media_purge_jobs/${jobId}`, next);
+      if (processing) tx.put(`processing/${asset.id}`, { ...processing, cleanupId: jobId, updatedAt: this.now() });
       // The per-asset tombstone now rejects stale editors. Release the global
       // check fence so unrelated editing continues even if R2 cleanup retries.
       tx.put(MEDIA_FENCE_KEY, { epoch: (fence?.epoch || 0) + 1 }); return next;
     });
   }
   private async deleteStep(job: PurgeJob): Promise<PurgeJob> {
+    if (job.recovery) {
+      const processing = await this.store.get<ProcessingJob>(`processing/${job.assetId}`);
+      assert(processing?.cleanupId === job.id && processing.runId === job.recovery.runId && processing.state === 'failed', 'PROCESSING_CHANGED', 409, '处理清理的所有权已改变，暂时保留容量。');
+      const upload = job.recovery.uploads[job.recovery.abortedUploads];
+      if (upload) {
+        // Abort every known handle before deleting keys. In-flight completions
+        // either win before abort (then their object is deleted) or cannot finish.
+        // A transport error is never evidence that a multipart no longer exists.
+        try { await this.bucket.resumeMultipartUpload(upload.key, upload.uploadId).abort(); }
+        catch (error) {
+          const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+          if (code !== 10024 && code !== 'NoSuchUpload' && !(error instanceof Error && /\b(?:10024|NoSuchUpload)\b/u.test(error.message))) throw error;
+        }
+        return this.store.transaction(async tx => {
+          const current = await tx.get<PurgeJob>(`media_purge_jobs/${job.id}`), latest = await tx.get<ProcessingJob>(`processing/${job.assetId}`);
+          if (current?.status === 'deleted') return current;
+          assert(current?.status === 'deleting' && current.recovery && latest?.cleanupId === job.id, 'PROCESSING_CHANGED', 409, '清理任务已改变');
+          if (current.recovery.abortedUploads !== job.recovery!.abortedUploads) return current;
+          const next = { ...current, recovery: { ...current.recovery, abortedUploads: current.recovery.abortedUploads + 1 }, updatedAt: new Date(this.now()).toISOString() };
+          tx.put(`media_purge_jobs/${job.id}`, next); return next;
+        });
+      }
+    }
     const key = job.keys[job.completedKeys];
-    if (key) await this.bucket.delete(key);
+    if (key) {
+      if (job.recovery) {
+        const object = await this.bucket.head(key), variant = job.recovery.variants.find(item => item.key === key);
+        if (object) assert(variant ? object.size === variant.bytes && object.etag === variant.multipartEtag && object.customMetadata?.assetId === job.assetId && object.customMetadata?.runId === job.recovery.runId && object.customMetadata?.role === variant.role && object.customMetadata?.sha256 === variant.sha256
+          : key === `originals/${job.assetId}/source` && object.size === job.bytes && object.version === job.recovery.originalVersion && object.etag === job.recovery.originalEtag,
+        'MEDIA_OBJECT_CHANGED', 409, '存储中的文件与处理记录不一致，已暂停清理并保留容量。');
+      }
+      await this.bucket.delete(key);
+      assert(!await this.bucket.head(key), 'MEDIA_DELETE_UNCONFIRMED', 409, '文件删除尚未确认，请继续重试；容量仍然保留。');
+    }
     return this.store.transaction(async tx => {
       const current = await tx.get<PurgeJob>(`media_purge_jobs/${job.id}`), asset = await tx.get<MediaAsset>(`media/${job.assetId}`), quota = await tx.get<Quota>('system/media_quota');
       assert(current && asset, 'PURGE_STATE_CONFLICT', 409, '删除记录需要核对'); if (current.status === 'deleted') return current;
       assert(current.status === 'deleting' && asset.lifecycle === 'purging', 'PURGE_STATE_CONFLICT', 409, '媒体清理状态已改变');
       if (current.completedKeys !== job.completedKeys) return current;
+      const processing = current.recovery ? await tx.get<ProcessingJob>(`processing/${current.assetId}`) : null;
+      if (current.recovery) assert(processing?.cleanupId === job.id && processing.runId === current.recovery.runId && processing.state === 'failed' && processing.reservedBytes === current.recovery.reservedBytes && current.recovery.abortedUploads === current.recovery.uploads.length,
+        'PROCESSING_CHANGED', 409, '处理清理记录需要核对，暂时保留容量。');
       const completedKeys = current.completedKeys + (key ? 1 : 0), at = new Date(this.now()).toISOString();
       const next = { ...current, completedKeys, status: completedKeys >= current.keys.length ? 'deleted' as const : 'deleting' as const, updatedAt: at };
       if (next.status === 'deleted') {
-        assert(quota && quota.usedBytes >= current.bytes, 'QUOTA_STATE_CONFLICT', 409, '容量账目需要核对，清理任务已保留以供重试');
-        tx.put('system/media_quota', { ...quota, usedBytes: quota.usedBytes - current.bytes });
+        const reservedBytes = current.recovery?.reservedBytes || 0;
+        assert(quota && Number.isSafeInteger(quota.usedBytes) && quota.usedBytes >= current.bytes && Number.isSafeInteger(quota.reservedBytes) && quota.reservedBytes >= reservedBytes, 'QUOTA_STATE_CONFLICT', 409, '容量账目需要核对，清理任务已保留以供重试');
+        tx.put('system/media_quota', { ...quota, usedBytes: quota.usedBytes - current.bytes, reservedBytes: quota.reservedBytes - reservedBytes });
         tx.put(`media/${asset.id}`, { ...asset, lifecycle: 'deleted', version: (asset.version || 1) + 1, deletedAt: at, updatedAt: at });
-        tx.put(`audit/${crypto.randomUUID()}`, { action: 'media_purged', assetId: asset.id, uid: current.authorUid, bytes: current.bytes, taskId: job.id, at });
+        if (processing) tx.put(`processing/${asset.id}`, { ...processing, reservedBytes: 0, cleanedAt: this.now(), updatedAt: this.now() });
+        tx.put(`audit/${crypto.randomUUID()}`, { action: current.recovery ? 'failed_media_cleaned' : 'media_purged', assetId: asset.id, uid: current.authorUid, bytes: current.bytes, reservedBytes, taskId: job.id, at });
       }
       tx.put(`media_purge_jobs/${job.id}`, next); return next;
     });

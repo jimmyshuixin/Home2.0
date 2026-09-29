@@ -4,6 +4,7 @@ type Comment = { id: string; nickname: string; body: string; createdAt?: string;
 const props = withDefaults(defineProps<{ targetType?: string; targetId?: string; compact?: boolean; presentation?: 'stream' | 'lanes' }>(), { targetType: 'guestbook', targetId: 'home', compact: false, presentation: 'stream' })
 const api = useApi()
 const comments = ref<Comment[]>([]), loading = ref(true), error = ref(''), cursor = ref<string | null>(null)
+const catalogReady = ref(true)
 const enabled = ref(true), paused = ref(false), reducedMotion = ref(true), pageVisible = ref(true)
 const viewport = ref<HTMLElement>()
 const laneComments = computed(() => createCommentLanes(comments.value))
@@ -47,6 +48,7 @@ async function load(more = false) {
     comments.value = more ? [...comments.value, ...response.data] : response.data
     laneLoops.value = []
     cursor.value = response.meta.nextCursor || null
+    catalogReady.value = response.meta.catalogReady !== false
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '留言暂时无法加载。' }
   finally { loading.value = false }
 }
@@ -76,7 +78,7 @@ defineExpose({ load })
     <div ref="viewport" :class="{ danmaku: compact, 'danmaku-animated': animated, 'danmaku-paused': paused || !pageVisible, 'danmaku-lanes': lanes }" :aria-live="animated && !paused ? 'off' : 'polite'">
       <p v-if="loading && !comments.length" class="muted" role="status">正在加载留言…</p>
       <div v-else-if="error" class="feedback error" role="status"><p>{{ error }}</p><button :disabled="loading" @click="load()">重试</button></div>
-      <p v-else-if="!comments.length" class="muted" role="status">还没有公开留言，来留第一句话。</p>
+      <p v-else-if="!comments.length" class="muted" role="status">{{ catalogReady ? '还没有公开留言，来留第一句话。' : '留言正在整理，稍后可查看完整列表。' }}</p>
       <ul v-else-if="lanes && animated" class="danmaku-lane-list" aria-label="公开留言">
         <li v-for="(lane, laneIndex) in laneComments" :key="laneIndex" class="danmaku-lane">
           <div class="danmaku-track" :class="{ 'is-ready': laneLoops[laneIndex]?.cycleWidth }" :style="{ '--lane-duration': `${laneLoops[laneIndex]?.durationSeconds || 30}s` }">

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch, useId } from 'vue';
 import { SafeHrefSchema, type RichTextDocument, type RichInline, type RichTextMark, type RichParagraph, type RichList } from '@xvyin/contracts';
+import { plainTextParagraphs } from '../plain-text';
 const props = defineProps<{ modelValue: RichTextDocument; label?: string }>();
 const emit = defineEmits<{ 'update:modelValue': [value: RichTextDocument] }>();
 const editor = ref<HTMLDivElement>();
@@ -107,7 +108,27 @@ function format(tag: string) {
 }
 function paste(event: ClipboardEvent) {
   event.preventDefault(); const value = event.clipboardData?.getData('text/plain') ?? ''; const range = restore(); if (!range) return;
-  range.deleteContents(); const text = document.createTextNode(value); range.insertNode(text); range.setStartAfter(text); range.collapse(true); update();
+  if (!value) return;
+  const paragraphs = plainTextParagraphs(value);
+  range.deleteContents();
+  let block = range.startContainer instanceof HTMLElement ? range.startContainer : range.startContainer.parentElement;
+  while (block && block !== editor.value && !/^(P|H[1-6])$/.test(block.tagName)) block = block.parentElement;
+  if (paragraphs.length > 1 && block && block !== editor.value) {
+    // Split the current paragraph (also inside a list item), retaining both
+    // surrounding text and its marks. Later pasted paragraphs are siblings.
+    const tail = document.createRange(); tail.selectNodeContents(block); tail.setStart(range.startContainer, range.startOffset);
+    const trailing = tail.extractContents();
+    range.insertNode(inlineNodes(paragraphs[0]!.content));
+    let last = block;
+    for (const paragraph of paragraphs.slice(1)) { const next = blockNode(paragraph); last.after(next); last = next; }
+    const caret = document.createTextNode(''); last.append(caret, trailing);
+    range.setStartBefore(caret);
+  } else {
+    const fragment = paragraphs.length === 1 ? inlineNodes(paragraphs[0]!.content) : document.createDocumentFragment();
+    if (paragraphs.length > 1) fragment.append(...paragraphs.map(blockNode));
+    const caret = document.createTextNode(''); fragment.append(caret); range.insertNode(fragment); range.setStartBefore(caret);
+  }
+  range.collapse(true); update();
 }
 onMounted(render); watch(() => props.modelValue, render, { deep: true });
 </script>

@@ -1,0 +1,72 @@
+name: V3 code checks
+
+on:
+  pull_request:
+  push:
+    branches: [main, codex/v3-production, codex/reliability-20260929]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v3-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  types-and-admin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.2'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare generated Nuxt types
+        working-directory: apps/web
+        run: npm exec -- nuxt prepare
+      - name: Check API, contracts, runners and both Vue applications
+        run: npm run check
+      - name: Build administrator application
+        run: npm run build --workspace @xvyin/admin
+
+  bounded-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.2'
+          package-manager-cache: false
+      - run: sudo apt-get update && sudo apt-get install --no-install-recommends --yes ffmpeg
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run bounded-concurrency tests without a shared Nuxt build
+        run: npm run test:unit
+      - name: Check anonymous collector transformations without network access
+        run: python3 -m unittest discover -s scripts/v3/test -p 'test_*.py'
+
+  publication:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NUXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.2'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Exercise real static generation, private preview, activation and rollback locally
+        run: npm run test:publication
+      # This job owns its checkout and Nuxt output. No production credentials,
+      # OIDC permission, deployment or private artifact upload is available.

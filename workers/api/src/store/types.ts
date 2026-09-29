@@ -1,4 +1,5 @@
 import { mediaCatalog, type MediaQueryOptions, type MediaQueryPage } from './media-query';
+import { PUBLIC_COMMENT_CATALOG, publicCommentCatalog, type PublicCommentQueryOptions, type PublicCommentQueryPage } from './public-comment-query';
 /** Private server-side storage. Callers never expose records without public projection. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export interface Transaction {
@@ -9,6 +10,7 @@ export interface Transaction {
 }
 export interface Store {
   queryMedia?<T>(options: MediaQueryOptions): Promise<MediaQueryPage<T>>;
+  queryPublicComments?(options: PublicCommentQueryOptions): Promise<PublicCommentQueryPage>;
   get<T>(key: string): Promise<T | null>;
   /** At most 100 keys. Results preserve input order and duplicate slots; missing records are null. */
   getMany<T>(keys: readonly string[]): Promise<Array<T | null>>;
@@ -142,6 +144,10 @@ export class BufferedTransaction implements Transaction {
   }
   put(key: string, value: unknown): void {
     this.#startWrite(key); this.#writes.set(key, { key, payload: serializeJson(value) });
+    if (key.startsWith('public_comments/')) {
+      const id = key.slice('public_comments/'.length), projected = publicCommentCatalog(value, id), catalogKey = `${PUBLIC_COMMENT_CATALOG}/${id}`;
+      this.#writes.set(catalogKey, { key: catalogKey, payload: projected ? serializeJson(projected) : null });
+    }
     if (key.startsWith('media/')) {
       const projected = mediaCatalog(value);
       if (projected) {
@@ -155,6 +161,7 @@ export class BufferedTransaction implements Transaction {
   }
   delete(key: string): void {
     this.#startWrite(key); this.#writes.set(key, { key, payload: null });
+    if (key.startsWith('public_comments/')) { const catalogKey = `${PUBLIC_COMMENT_CATALOG}/${key.slice('public_comments/'.length)}`; this.#writes.set(catalogKey, { key: catalogKey, payload: null }); }
     if (key.startsWith('media/')) { const catalogKey = `media_catalog/${key.slice(6)}`; this.#writes.set(catalogKey, { key: catalogKey, payload: null }); }
   }
   finish(): BufferedWrite[] {

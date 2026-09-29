@@ -1,4 +1,4 @@
-export type ApiResult<T> = { data: T; meta: { requestId: string; schemaVersion: number; nextCursor?: string | null } }
+export type ApiResult<T> = { data: T; meta: { requestId: string; schemaVersion: number; nextCursor?: string | null; catalogReady?: boolean } }
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string, public requestId?: string) { super(message) }
 }

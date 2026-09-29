@@ -4,6 +4,7 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { BufferedTransaction, deserializeJson, listOptions, makeCursor, SerialQueue, StoreError, validateKey, validateKeys, type Store, type Transaction } from './types';
 import { mediaCursor, mediaQueryOptions, mediaSortValue, type MediaQueryOptions, type MediaQueryPage } from './media-query';
+import { publicCommentCursor, publicCommentQueryOptions, publicCommentSortValue, type PublicComment, type PublicCommentQueryOptions, type PublicCommentQueryPage } from './public-comment-query';
 
 const fileQueues = new Map<string, { queue: SerialQueue; references: number }>();
 function isBusy(error: unknown): boolean {
@@ -28,6 +29,7 @@ export class SqliteStore implements Store {
       this.#db.exec('PRAGMA synchronous=FULL');
       this.#db.exec('CREATE TABLE IF NOT EXISTS documents (collection TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (collection, id)) WITHOUT ROWID');
       this.#db.function('media_sort', { deterministic: true }, (payload, sort) => mediaSortValue(JSON.parse(String(payload)), String(sort) as MediaQueryOptions['sort']));
+      this.#db.function('public_comment_sort', { deterministic: true }, payload => publicCommentSortValue(JSON.parse(String(payload)) as PublicComment));
       const canonical = path === ':memory:' ? null : realpathSync(path);
       this.#fileKey = canonical && process.platform === 'win32' ? canonical.toLowerCase() : canonical;
       if (this.#fileKey) {
@@ -93,6 +95,17 @@ export class SqliteStore implements Store {
         const rows = this.#db.prepare(`SELECT id,payload,media_sort(payload,?) AS sort_value FROM documents WHERE collection='media_catalog' AND (?='' OR sort_value ${comparison} ?) ORDER BY sort_value COLLATE BINARY ${direction} LIMIT ?`).all(options.sort, after, after, limit + 1);
         const items = rows.slice(0, limit).map(row => ({ id: String(row.id), data: deserializeJson<T>(String(row.payload)), sortValue: String(row.sort_value) }));
         return { items, nextCursor: rows.length > limit ? mediaCursor(options, items.at(-1)!.sortValue) : null };
+      } catch (error) { throw storageError(error); }
+    });
+  }
+  queryPublicComments(options: PublicCommentQueryOptions): Promise<PublicCommentQueryPage> {
+    const { limit, after, lower, upper } = publicCommentQueryOptions(options);
+    return this.#queue.run(() => {
+      this.#assertOpen();
+      try {
+        const rows = this.#db.prepare("SELECT id,payload,public_comment_sort(payload) AS sort_value FROM documents WHERE collection='public_comment_catalog' AND sort_value>=? AND sort_value<? AND (?='' OR sort_value<?) ORDER BY sort_value COLLATE BINARY DESC LIMIT ?").all(lower, upper, after, after, limit + 1);
+        const items = rows.slice(0, limit).map(row => ({ id: String(row.id), data: deserializeJson<PublicComment>(String(row.payload)), sortValue: String(row.sort_value) }));
+        return { items, nextCursor: rows.length > limit ? publicCommentCursor(options, items.at(-1)!.sortValue) : null };
       } catch (error) { throw storageError(error); }
     });
   }
