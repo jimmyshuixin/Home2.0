@@ -34,7 +34,7 @@ Project cards show the newest eligible projects, real descriptions, primary lang
 
 ## Embedded video and Douyin
 
-Existing providerRef remains the media source. Strict Bilibili BV/av IDs, YouTube IDs and numeric Douyin video IDs generate only their fixed official players; raw iframe HTML is never accepted. CSP adds exactly https://open.douyin.com alongside player.bilibili.com and www.youtube-nocookie.com.
+Existing providerRef remains the media source. Strict Bilibili BV/av IDs, YouTube IDs and numeric Douyin video IDs generate only their fixed official players; raw iframe HTML is never accepted. CSP permits player.bilibili.com, www.youtube-nocookie.com and open.douyin.com. Bilibili's official embed navigates its frame to https://www.bilibili.com/blackboard/webplayer/mbplayer.html on mobile user agents (verified from its public player HTML on 2026-09-29). The exact mobile player path is also permitted; other www.bilibili.com paths and wildcard subdomains remain excluded. The top-level page's script and connection policies are unchanged.
 
 Players are created only after a click, with autoplay disabled, reserved responsive space, fullscreen, close/reload and original-platform controls. Shared media focus pauses site audio and removes another active iframe. Bilibili multi-part videos use the first part. Individual works remain subject to platform, visitor-login, region and uploader restrictions.
 

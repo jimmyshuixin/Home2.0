@@ -27,6 +27,18 @@ function resolutionMessage(error: unknown): string {
   if (code === 'QQ_BROWSER_UNSUPPORTED') return '当前浏览器暂时无法播放 QQ 音乐，请前往原平台聆听。'
   return 'QQ 音乐暂时未提供这首歌的可用播放地址，请重试、切换站内歌单，或前往原平台聆听。'
 }
+function retryableResolution(error: unknown): boolean {
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+  return code === 'QQ_UNAVAILABLE' || code === 'QQ_TIMEOUT'
+}
+function waitForResolutionRetry(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cancelled = () => { clearTimeout(timer); signal.removeEventListener('abort', cancelled); reject(new DOMException('Playback cancelled', 'AbortError')) }
+    const timer = setTimeout(() => { signal.removeEventListener('abort', cancelled); resolve() }, 350)
+    signal.addEventListener('abort', cancelled, { once: true })
+    if (signal.aborted) cancelled()
+  })
+}
 
 /** One instance belongs to one client Nuxt app. No promise, token or temporary URL is persisted. */
 export class MusicPlaybackController {
@@ -83,7 +95,7 @@ export class MusicPlaybackController {
     if (!this.audio.paused && !this.audio.ended) return Promise.resolve()
     if (this.audio.ended) { this.cancel(); this.audio.currentTime = 0; this.sync() }
     this.recoveryCount = 0
-    return this.beginPlay(false, this.stateValue.position)
+    return this.beginPlay(Boolean(this.selection.qq && this.stateValue.status === 'error'), this.stateValue.position)
   }
   pause(): void {
     if (this.disposed) return
@@ -106,7 +118,7 @@ export class MusicPlaybackController {
   }
   private assignSource(source: string | undefined, position: number): void {
     const audio = this.audio
-    if (!audio || source === this.assignedSource) return
+    if (!audio || source === this.assignedSource && !audio.error) return
     this.assignedSource = source
     this.pendingSeek = source && position > 0 ? { generation: this.generation, position } : null
     if (source) audio.src = source
@@ -124,7 +136,20 @@ export class MusicPlaybackController {
       if (selection.qq && (forceResolve || !source)) {
         const abort = new AbortController(); this.resolverAbort = abort
         this.update({ status: 'resolving', playing: false })
-        try { source = safeQqUrl(await this.options.resolveQq(selection.qq, abort.signal)) }
+        try {
+          let resolved: string
+          try { resolved = await this.options.resolveQq(selection.qq, abort.signal) }
+          catch (error) {
+            if (abort.signal.aborted || !this.current(generation, key) || !retryableResolution(error)) throw error
+            // A fresh resolver document gets a new nonce/provider request. Keep the
+            // user's play intent through one transient failure, then show the error.
+            await waitForResolutionRetry(abort.signal)
+            if (abort.signal.aborted || !this.current(generation, key)) return
+            resolved = await this.options.resolveQq(selection.qq, abort.signal)
+          }
+          // URL validation remains outside retry: an unsafe response must fail closed.
+          source = safeQqUrl(resolved)
+        }
         catch (error) {
           if (this.current(generation, key) && !abort.signal.aborted) this.update({ desiredPlay: false, status: 'error', error: resolutionMessage(error) })
           return

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MusicPlaybackController, MusicRequestSequence, type MusicSelection, type PlaybackAudio } from '../lib/music-playback'
 import { MediaFocusManager } from '../lib/media-focus'
 
@@ -16,6 +16,9 @@ const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(
 const qq = (id: string): MusicSelection => ({ key: `release:playlist:${id}`, qq: { songmid: id, playlistId: 'playlist', trackId: id } })
 const direct: MusicSelection = { key: 'release:local:one', source: '/api/v1/media/asset/playback' }
 const url = (id: string) => `https://dl.stream.qqmusic.qq.com/${id}.m4a?vkey=private-temporary-value`
+const unavailable = (code = 'QQ_UNAVAILABLE') => Object.assign(new Error('PRIVATE provider content'), { code })
+
+afterEach(() => vi.useRealTimers())
 
 describe('shared asynchronous music controller', () => {
   it('does not resolve QQ or play media on selection or attachment alone', async () => {
@@ -91,14 +94,66 @@ describe('shared asynchronous music controller', () => {
     audio.fail(); await settle(); expect(resolveQq).toHaveBeenCalledTimes(2); expect(controller.state.status).toBe('error'); expect(controller.state.desiredPlay).toBe(false); controller.dispose()
   })
 
+  it('reloads a failed audio element when QQ returns the same address and allows an explicit fresh retry', async () => {
+    const resolveQq = vi.fn().mockResolvedValue(url('A')), audio = new FakeAudio()
+    const controller = new MusicPlaybackController({ resolveQq }); controller.attach(audio); await controller.select(qq('A'), true)
+    const loads = audio.load.mock.calls.length
+    audio.currentTime = 31; audio.fail(); await settle()
+    expect(audio.load).toHaveBeenCalledTimes(loads + 1); expect(audio.error).toBeNull(); expect(audio.currentTime).toBe(31)
+    expect(controller.state.playing).toBe(true)
+    audio.fail(); await settle(); expect(controller.state.status).toBe('error')
+    await controller.play()
+    expect(resolveQq).toHaveBeenCalledTimes(3); expect(audio.load).toHaveBeenCalledTimes(loads + 2)
+    expect(controller.state.playing).toBe(true); controller.dispose()
+  })
+
+  it.each(['QQ_UNAVAILABLE', 'QQ_TIMEOUT'])('recovers a transient %s once within the original play request', async code => {
+    vi.useFakeTimers()
+    const resolveQq = vi.fn().mockRejectedValueOnce(unavailable(code)).mockResolvedValueOnce(url('A')), audio = new FakeAudio()
+    const controller = new MusicPlaybackController({ resolveQq }); controller.attach(audio); await controller.select(qq('A'))
+    const first = controller.play(); await settle()
+    expect(controller.state).toMatchObject({ status: 'resolving', desiredPlay: true, error: '' })
+    expect(controller.play()).toBe(first); expect(resolveQq).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(350); await first
+    expect(resolveQq).toHaveBeenCalledTimes(2); expect(audio.play).toHaveBeenCalledTimes(1)
+    expect(controller.state).toMatchObject({ status: 'playing', playing: true, error: '' }); controller.dispose()
+  })
+
+  it.each(['pause', 'change', 'dispose'] as const)('cancels a queued resolution retry on %s', async action => {
+    vi.useFakeTimers()
+    const resolveQq = vi.fn().mockRejectedValue(unavailable()), audio = new FakeAudio()
+    const controller = new MusicPlaybackController({ resolveQq }); controller.attach(audio)
+    const pending = controller.select(qq('A'), true); await settle()
+    if (action === 'change') await controller.select(qq('B'))
+    else controller[action]()
+    await pending; await vi.advanceTimersByTimeAsync(1000)
+    expect(resolveQq).toHaveBeenCalledTimes(1); expect(resolveQq.mock.calls[0]![1].aborted).toBe(true)
+    expect(audio.play).not.toHaveBeenCalled(); expect(controller.state.desiredPlay).toBe(false)
+    expect(vi.getTimerCount()).toBe(0); controller.dispose()
+  })
+
+  it('ignores a stale retried resolution after another track starts playing', async () => {
+    vi.useFakeTimers()
+    const retried = deferred<string>(), audio = new FakeAudio()
+    const resolveQq = vi.fn().mockRejectedValueOnce(unavailable()).mockReturnValueOnce(retried.promise).mockResolvedValueOnce(url('B'))
+    const controller = new MusicPlaybackController({ resolveQq }); controller.attach(audio)
+    const old = controller.select(qq('A'), true); await settle(); await vi.advanceTimersByTimeAsync(350)
+    await controller.select(qq('B'), true); retried.resolve(url('A')); await old
+    expect(resolveQq.mock.calls[1]![1].aborted).toBe(true); expect(audio.src).toBe(url('B'))
+    expect(audio.play).toHaveBeenCalledTimes(1); expect(controller.state.error).toBe(''); controller.dispose()
+  })
+
   it.each(['http://qq.com/song', 'https://evil.invalid/song', 'https://qq.com.evil.invalid/song', 'https://user:secret@qq.com/song', 'https://qq.com:444/song', 'https://qq.com/song#fragment'])('rejects unsafe resolver output %s', async source => {
     const audio = new FakeAudio(), controller = new MusicPlaybackController({ resolveQq: async () => source }); controller.attach(audio)
     await controller.select(qq('A'), true); expect(audio.play).not.toHaveBeenCalled(); expect(controller.state.status).toBe('error'); expect(controller.state.error).not.toContain(source); controller.dispose()
   })
 
   it.each(['QQ_BROWSER_UNSUPPORTED', 'QQ_UNAVAILABLE', 'QQ_TIMEOUT'])('keeps provider refusal %s as a visible failure', async code => {
-    const audio = new FakeAudio(), controller = new MusicPlaybackController({ resolveQq: async () => { throw Object.assign(new Error('PRIVATE provider content'), { code }) } }); controller.attach(audio)
-    await controller.select(qq('A'), true); expect(audio.play).not.toHaveBeenCalled(); expect(controller.state.status).toBe('error'); expect(controller.state.error).toContain(code === 'QQ_BROWSER_UNSUPPORTED' ? '当前浏览器暂时无法播放 QQ 音乐' : '未提供'); expect(controller.state.error).not.toContain('PRIVATE'); controller.dispose()
+    vi.useFakeTimers()
+    const resolveQq = vi.fn().mockRejectedValue(unavailable(code)), audio = new FakeAudio(), controller = new MusicPlaybackController({ resolveQq }); controller.attach(audio)
+    const pending = controller.select(qq('A'), true); await settle(); await vi.advanceTimersByTimeAsync(350); await pending
+    expect(resolveQq).toHaveBeenCalledTimes(code === 'QQ_BROWSER_UNSUPPORTED' ? 1 : 2)
+    expect(audio.play).not.toHaveBeenCalled(); expect(controller.state.status).toBe('error'); expect(controller.state.error).toContain(code === 'QQ_BROWSER_UNSUPPORTED' ? '当前浏览器暂时无法播放 QQ 音乐' : '未提供'); expect(controller.state.error).not.toContain('PRIVATE'); controller.dispose()
   })
 
   it('pauses a late native play event after the user has cancelled', async () => {

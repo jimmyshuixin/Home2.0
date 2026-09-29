@@ -38,15 +38,17 @@ beforeEach(async () => {
 });
 afterAll(async () => { await mf.dispose(); });
 
-it('allows only the two fixed video-player origins in HTML, including private previews', async () => {
+it('allows the official video players and exact Bilibili mobile destination in HTML, including cached pages and previews', async () => {
   for (const preview of [false, true]) {
-    const result = await serveObject(bucket, 'test-object', request(), 'text/html; charset=utf-8', preview, release, context);
-    const csp = result.headers.get('content-security-policy')!;
-    expect(csp.split(';').map(value => value.trim()).find(value => value.startsWith('frame-src '))).toBe("frame-src 'self' https://player.bilibili.com https://www.youtube-nocookie.com https://open.douyin.com");
-    expect(csp).toContain("connect-src 'self'");
-    expect(csp).toContain("object-src 'none'");
-    expect(result.headers.get('x-frame-options')).toBe('DENY');
-    await result.text();
+    for (const method of ['GET', 'GET', 'HEAD']) {
+      const result = await serveObject(bucket, 'test-object', request({}, method), 'text/html; charset=utf-8', preview, release, context);
+      const csp = result.headers.get('content-security-policy')!;
+      expect(csp.split(';').map(value => value.trim()).find(value => value.startsWith('frame-src '))).toBe("frame-src 'self' https://player.bilibili.com https://www.bilibili.com/blackboard/webplayer/mbplayer.html https://www.youtube-nocookie.com https://open.douyin.com");
+      expect(csp).toContain("connect-src 'self'");
+      expect(csp).toContain("object-src 'none'");
+      expect(result.headers.get('x-frame-options')).toBe('DENY');
+      await result.text();
+    }
   }
 });
 
