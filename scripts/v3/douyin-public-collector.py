@@ -26,6 +26,9 @@ PROFILE_URL = f"https://www.douyin.com/user/{TARGET}"
 OUTPUT_DIRECTORY = Path(__file__).resolve().parents[2] / "output"
 TOTAL_TIMEOUT_SECONDS = 180
 CALL_TIMEOUT_SECONDS = 35
+MINT_ATTEMPTS = 2
+MINT_RETRY_DELAY_SECONDS = 2
+MAX_EXCEPTION_CHAIN = 4
 WORK_LIMIT = 6
 MAX_SAFE_INTEGER = 9007199254740991
 FAILURE_REASONS = frozenset({
@@ -39,6 +42,10 @@ LOGIN_MARKERS = frozenset({"sessionid", "sessionid_ss", "sid_tt", "sid_guard"})
 _UNSAFE_TEXT = re.compile(r"[<>\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
 _TAGS = re.compile(r"<[^>]*>")
 _AVATAR_PATH = re.compile(r"/aweme/1080x1080/aweme-avatar/[A-Za-z0-9_-]+\.(?:jpeg|jpg|png|webp)")
+_BROWSER_NETWORK_ERROR = re.compile(
+    r"\bnet::(ERR_CONNECTION_CLOSED|ERR_CONNECTION_RESET|ERR_CONNECTION_TIMED_OUT|"
+    r"ERR_TIMED_OUT|ERR_NAME_NOT_RESOLVED|ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED)\b"
+)
 
 
 class CollectorError(Exception):
@@ -151,19 +158,82 @@ def normalize_works(items, captured_at):
     return {"works": works, "worksUpdatedAt": iso_time(captured_at)}
 
 
-def failure_reason(error):
+def next_exception(error):
+    # Upstream explicitly wraps page.goto failures with `raise BackendFailure from exc`.
+    # Respect `from None`; unrelated suppressed exceptions must not guide a retry.
+    return error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+
+
+def exception_chain(error):
+    chain = []
+    while isinstance(error, BaseException) and len(chain) < MAX_EXCEPTION_CHAIN:
+        if any(error is previous for previous in chain):
+            break
+        chain.append(error)
+        error = next_exception(error)
+    return chain
+
+
+def browser_network_code(error):
+    # Read only the known Playwright error type, and expose only a fixed code.
+    # Never persist browser messages: they can include URLs, cookies or headers.
+    if not type(error).__module__.startswith("playwright."):
+        return None
+    message = error.args[0] if error.args and isinstance(error.args[0], str) else ""
+    match = _BROWSER_NETWORK_ERROR.search(message[:4096])
+    return match.group(1) if match else None
+
+
+def direct_failure_reason(error):
     if isinstance(error, CollectorError):
         return error.reason
-    if isinstance(error, TimeoutError):
-        return "timeout"
     name = type(error).__name__
+    if isinstance(error, TimeoutError) or name in {"TimeoutError", "OperationTimeout"}:
+        return "timeout"
     if name in {"UpstreamRiskControl"}:
         return "upstream-blocked"
     if name in {"UpstreamChanged", "InvalidParam", "ValidationError", "JSONDecodeError", "UnicodeDecodeError"}:
         return "invalid-response"
-    if name in {"TransportFailure", "ConnectError", "NetworkError", "ConnectionError", "OSError"}:
+    if (isinstance(error, ConnectionError) or browser_network_code(error)
+            or name in {"TransportFailure", "ConnectError", "NetworkError", "ConnectionError", "OSError"}):
         return "network"
     return "unavailable"
+
+
+def failure_reason(error):
+    reasons = [direct_failure_reason(item) for item in exception_chain(error)]
+    # A declared platform restriction/invalid response is never weakened by a cause.
+    for reason in ("upstream-blocked", "rate-limited", "invalid-response"):
+        if reason in reasons:
+            return reason
+    return next((reason for reason in reasons if reason != "unavailable"), "unavailable")
+
+
+def mint_retryable(error):
+    chain = exception_chain(error)
+    if not chain or next_exception(chain[-1]) is not None:
+        return False  # Cycles/truncation leave the underlying cause unknown.
+    if failure_reason(error) not in {"timeout", "network"}:
+        return False
+    transient = False
+    for index, item in enumerate(chain):
+        name = type(item).__name__
+        if name == "BackendFailure":
+            continue
+        if (isinstance(item, asyncio.CancelledError) and index > 0
+                and isinstance(chain[index - 1], TimeoutError)):
+            # asyncio.wait_for raises TimeoutError from its completed cancellation.
+            # An external CancelledError still propagates outside this helper.
+            continue
+        if (isinstance(item, (TimeoutError, ConnectionError))
+                or name in {"TimeoutError", "OperationTimeout", "ConnectError", "NetworkError"}
+                or browser_network_code(item)):
+            transient = True
+            continue
+        # Generic BackendFailure/OSError, launch/configuration errors and unknown
+        # wrappers are not evidence of a transient navigation failure.
+        return False
+    return transient
 
 
 def safe_name(value):
@@ -171,14 +241,41 @@ def safe_name(value):
 
 
 def diagnostic_error(error, phase):
-    return {
+    chain = exception_chain(error)
+    diagnostic = {
         "stage": safe_name(phase), "reason": failure_reason(error),
         "exceptionType": safe_name(type(error).__name__),
+        "causeTypes": [safe_name(type(item).__name__) for item in chain[1:]],
         "stack": [
             {"filename": Path(frame.filename).name, "line": frame.lineno, "function": safe_name(frame.name)}
             for frame in traceback.extract_tb(error.__traceback__)[-8:]
         ],
     }
+    code = next((code for item in chain if (code := browser_network_code(item))), None)
+    if code:
+        diagnostic["browserNetworkCode"] = code
+    return diagnostic
+
+
+async def mint_guest(mint, diagnostics, sleep=asyncio.sleep):
+    """Retry one explicit transient failure using the same caller-owned guest plan.
+
+    No profile, proxy, fingerprint, URL or credentials are rotated by this helper.
+    The existing outer collection timeout remains authoritative.
+    """
+    for attempt in range(1, MINT_ATTEMPTS + 1):
+        diagnostics["attempts"]["mint"] += 1
+        try:
+            return await asyncio.wait_for(mint(), CALL_TIMEOUT_SECONDS)
+        except Exception as error:
+            if attempt == MINT_ATTEMPTS or not mint_retryable(error):
+                raise
+            diagnostics.setdefault("retries", []).append({
+                **diagnostic_error(error, "guest-mint"),
+                "attempt": attempt, "nextAttempt": attempt + 1,
+                "delaySeconds": MINT_RETRY_DELAY_SECONDS,
+            })
+            await sleep(MINT_RETRY_DELAY_SECONDS)
 
 
 def response_failure(http_status, outcome):
@@ -234,14 +331,14 @@ async def collect_with_dtk(state, diagnostics):
             diagnostics["phase"] = "browser-start"
             await asyncio.wait_for(backend.start(), CALL_TIMEOUT_SECONDS)
             diagnostics["phase"] = "guest-mint"
-            diagnostics["attempts"]["mint"] += 1
-            minted = await asyncio.wait_for(backend.mint(MintPlan(
+            mint_plan = MintPlan(
                 platform=BrowserPlatform.DOUYIN,
                 landing_url=LANDING_URLS[BrowserPlatform.DOUYIN],
                 profile_dir=str(Path(temporary_root) / "guest"),
                 geo=GeoProfile(timezone="UTC", locale="en-US", languages="en-US,en;q=0.9"),
                 proxy=None, timeout_seconds=CALL_TIMEOUT_SECONDS - 5,
-            )), CALL_TIMEOUT_SECONDS)
+            )
+            minted = await mint_guest(lambda: backend.mint(mint_plan), diagnostics)
             cookies.update(minted.cookies)
             if not cookies or any(cookies.get(name) for name in LOGIN_MARKERS):
                 raise CollectorError("invalid-response")
