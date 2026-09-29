@@ -53,14 +53,59 @@ async function rejectCloudflareChallenge(response:Response):Promise<void>{
  }
 }
 function nonJsonResponse(response:Response):PublishError{return new PublishError('NON_JSON_RESPONSE',`执行器收到非 JSON 服务响应（HTTP ${response.status}）；请检查站点网关与传输入口，可使用相同命令继续。`);}
+class RetryableOidcError extends Error {}
+const oidcUnavailable=()=>new PublishError('OIDC_UNAVAILABLE','无法获取 GitHub 短期身份。');
+const oidcAborted=(caller?:AbortSignal|null)=>caller?.aborted?new PublishError('REQUEST_ABORTED','执行已取消。'):oidcUnavailable();
+function temporaryOidcTransport(error:unknown):boolean{
+ if(!isRecord(error)&&!(error instanceof Error))return false;
+ const cause=(error as {cause?:unknown}).cause;
+ const code=isRecord(cause)&&typeof cause.code==='string'?cause.code:isRecord(error)&&typeof error.code==='string'?error.code:undefined;
+ if(code)return['ECONNRESET','ECONNREFUSED','ETIMEDOUT','EAI_AGAIN','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET'].includes(code);
+ // Node fetch uses TypeError for transport failure. A redirect rejection has a
+ // cause and must not be retried; neither certificate/configuration failures nor
+ // arbitrary application exceptions are treated as temporary transport errors.
+ return error instanceof TypeError&&cause===undefined;
+}
+async function oidcWait(signal:AbortSignal,caller?:AbortSignal|null){
+ if(signal.aborted)throw oidcAborted(caller);
+ await new Promise<void>((resolve,reject)=>{
+  const cancel=()=>{clearTimeout(timer);reject(oidcAborted(caller));};
+  const timer=setTimeout(()=>{signal.removeEventListener('abort',cancel);resolve();},300);
+  signal.addEventListener('abort',cancel,{once:true});
+ });
+}
+async function oidcAttempt(url:URL,token:string,transport:typeof fetch,signal:AbortSignal,caller?:AbortSignal|null):Promise<string>{
+ if(signal.aborted)throw oidcAborted(caller);
+ const controller=new AbortController();let reader:ReadableStreamDefaultReader<Uint8Array>|undefined;
+ let interrupt!:(error:Error)=>void;const interrupted=new Promise<never>((_,reject)=>{interrupt=reject;});
+ const stop=(error:Error)=>{interrupt(error);controller.abort();void reader?.cancel().catch(()=>{});};
+ const cancel=()=>stop(oidcAborted(caller));
+ const timer=setTimeout(()=>stop(new RetryableOidcError()),15000);
+ signal.addEventListener('abort',cancel,{once:true});
+ try{return await Promise.race([interrupted,(async()=>{
+  const response=await transport(url,{method:'GET',headers:{Authorization:`Bearer ${token}`},redirect:'error',signal:controller.signal});
+  if(response.headers.get('cf-mitigated')?.toLowerCase()==='challenge'||response.ok&&/^text\/html(?:;|$)/iu.test(response.headers.get('content-type')||'')){void response.body?.cancel().catch(()=>{});throw oidcUnavailable();}
+  if(!response.ok){void response.body?.cancel().catch(()=>{});if([502,503,504].includes(response.status))throw new RetryableOidcError();throw new PublishError('OIDC_UNAVAILABLE','GitHub 拒绝签发短期身份。');}
+  reader=response.body?.getReader();check(reader,'OIDC_UNAVAILABLE','GitHub 返回的短期身份无效。');
+  const chunks:Uint8Array[]=[];let size=0;
+  for(;;){const next=await reader.read();if(next.done)break;size+=next.value.byteLength;if(size>20000){void reader.cancel().catch(()=>{});throw new PublishError('OIDC_UNAVAILABLE','GitHub 返回的短期身份无效。');}chunks.push(next.value);}
+  const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+  let data:unknown;try{data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{throw new PublishError('OIDC_UNAVAILABLE','GitHub 返回的短期身份无效。');}
+  check(isRecord(data)&&typeof data.value==='string'&&/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(data.value),'OIDC_UNAVAILABLE','GitHub 返回的短期身份无效。');return data.value;
+ })()]);}
+ catch(error){if(signal.aborted)throw oidcAborted(caller);if(error instanceof PublishError||error instanceof RetryableOidcError)throw error;if(temporaryOidcTransport(error))throw new RetryableOidcError();throw oidcUnavailable();}
+ finally{clearTimeout(timer);signal.removeEventListener('abort',cancel);controller.abort();void reader?.cancel().catch(()=>{});try{reader?.releaseLock();}catch{/* A pending read is already being cancelled; never await an untrusted body. */}}
+}
 export class RunnerClient{
  #cachedToken='';#tokenUntil=0;
  constructor(readonly origin:string,readonly state:Pick<RunnerState,'mode'|'localRunId'>&{jobId?:string},private readonly credentials:Credentials|undefined,private readonly transport:typeof fetch=fetch,private readonly environment:Record<string,string|undefined>=process.env,private readonly now=Date.now,private readonly requestTimeoutMs=60000){this.origin=validateOrigin(origin);}
- async #headers():Promise<Record<string,string>>{if(this.state.mode==='local'){check(this.credentials,'INVALID_AUTH_FILE','缺少管理员会话文件。');return{Origin:this.origin,Cookie:this.credentials.cookie,'X-CSRF-Token':this.credentials.csrfToken,'X-Xvyin-Local-Run':this.state.localRunId};}
-  if(this.now()>=this.#tokenUntil){const raw=this.environment.ACTIONS_ID_TOKEN_REQUEST_URL,token=this.environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN;check(raw&&token,'OIDC_UNAVAILABLE','GitHub OIDC 运行环境未配置。');let url:URL;try{url=new URL(raw);}catch{throw new PublishError('OIDC_UNAVAILABLE','GitHub OIDC 运行环境无效。');}check(url.protocol==='https:'&&(url.hostname==='actions.githubusercontent.com'||url.hostname.endsWith('.actions.githubusercontent.com'))&&!url.username&&!url.password,'OIDC_UNAVAILABLE','OIDC 签发地址未通过校验。');url.searchParams.set('audience',`${this.origin}/v3-runner`);let response:Response;try{response=await this.transport(url,{headers:{Authorization:`Bearer ${token}`},redirect:'error',signal:AbortSignal.timeout(15000)});}catch{throw new PublishError('OIDC_UNAVAILABLE','无法获取 GitHub 短期身份。');}check(response.ok,'OIDC_UNAVAILABLE','GitHub 拒绝签发短期身份。');const data=await boundedResponse(response,20000);check(isRecord(data)&&typeof data.value==='string'&&/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(data.value),'OIDC_UNAVAILABLE','GitHub 返回的短期身份无效。');this.#cachedToken=data.value;this.#tokenUntil=this.now()+180000;}
+ async #headers(signal:AbortSignal,caller?:AbortSignal|null):Promise<Record<string,string>>{if(signal.aborted)throw oidcAborted(caller);if(this.state.mode==='local'){check(this.credentials,'INVALID_AUTH_FILE','缺少管理员会话文件。');return{Origin:this.origin,Cookie:this.credentials.cookie,'X-CSRF-Token':this.credentials.csrfToken,'X-Xvyin-Local-Run':this.state.localRunId};}
+  if(this.now()>=this.#tokenUntil){const raw=this.environment.ACTIONS_ID_TOKEN_REQUEST_URL,token=this.environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN;check(raw&&token,'OIDC_UNAVAILABLE','GitHub OIDC 运行环境未配置。');let url:URL;try{url=new URL(raw);}catch{throw new PublishError('OIDC_UNAVAILABLE','GitHub OIDC 运行环境无效。');}check(url.protocol==='https:'&&(url.hostname==='actions.githubusercontent.com'||url.hostname.endsWith('.actions.githubusercontent.com'))&&!url.username&&!url.password,'OIDC_UNAVAILABLE','OIDC 签发地址未通过校验。');url.searchParams.set('audience',`${this.origin}/v3-runner`);
+   for(let attempt=0;attempt<2;attempt++){try{const value=await oidcAttempt(url,token,this.transport,signal,caller);if(signal.aborted)throw oidcAborted(caller);this.#cachedToken=value;this.#tokenUntil=this.now()+180000;break;}catch(error){if(error instanceof RetryableOidcError&&attempt===0){await oidcWait(signal,caller);continue;}if(error instanceof PublishError)throw error;throw oidcUnavailable();}}
+  }
   return{Origin:this.origin,Authorization:`Bearer ${this.#cachedToken}`};}
  async requestRaw(path:string,init:RequestInit={}):Promise<Response>{const url=internalRunnerUrl(this.origin,this.state.mode,path);const replayable=!init.body||typeof init.body==='string'||init.body instanceof Uint8Array||init.body instanceof Blob;const attempts=replayable?3:1;
-  for(let attempt=0;attempt<attempts;attempt++){const headers=new Headers(init.headers);for(const name of ['authorization','cookie','origin','x-csrf-token','x-xvyin-local-run','host','x-forwarded-host','x-forwarded-proto','forwarded','x-forwarded-port'])headers.delete(name);for(const[key,value]of Object.entries(await this.#headers()))headers.set(key,value);headers.set('Accept','application/json');check(Number.isFinite(this.requestTimeoutMs)&&this.requestTimeoutMs>=1000&&this.requestTimeoutMs<=900000,'INVALID_TIMEOUT','执行器超时配置无效。');const own=AbortSignal.timeout(this.requestTimeoutMs);const signal=init.signal?AbortSignal.any([init.signal,own]):own;let response:Response;try{response=await this.transport(url,{...init,headers,redirect:'error',signal});}catch{if(init.signal?.aborted)throw new PublishError('REQUEST_ABORTED','执行已取消。');if(attempt+1<attempts){await delay(500*(attempt+1));continue;}throw new PublishError('NETWORK_ERROR','请求未确认，可使用相同命令继续执行。');}await rejectCloudflareChallenge(response);if((response.status===429||response.status>=500)&&attempt+1<attempts){await response.body?.cancel();await delay(1000*(attempt+1));continue;}if(/^text\/html(?:;|$)/iu.test(response.headers.get('content-type')||'')||!response.ok&&/^text\/plain(?:;|$)/iu.test(response.headers.get('content-type')||'')){await response.body?.cancel();throw nonJsonResponse(response);}return response;}
+  for(let attempt=0;attempt<attempts;attempt++){check(Number.isFinite(this.requestTimeoutMs)&&this.requestTimeoutMs>=1000&&this.requestTimeoutMs<=900000,'INVALID_TIMEOUT','执行器超时配置无效。');const own=AbortSignal.timeout(this.requestTimeoutMs);const signal=init.signal?AbortSignal.any([init.signal,own]):own;const headers=new Headers(init.headers);for(const name of ['authorization','cookie','origin','x-csrf-token','x-xvyin-local-run','host','x-forwarded-host','x-forwarded-proto','forwarded','x-forwarded-port'])headers.delete(name);for(const[key,value]of Object.entries(await this.#headers(signal,init.signal)))headers.set(key,value);headers.set('Accept','application/json');let response:Response;try{response=await this.transport(url,{...init,headers,redirect:'error',signal});}catch{if(init.signal?.aborted)throw new PublishError('REQUEST_ABORTED','执行已取消。');if(attempt+1<attempts){await delay(500*(attempt+1));continue;}throw new PublishError('NETWORK_ERROR','请求未确认，可使用相同命令继续执行。');}await rejectCloudflareChallenge(response);if((response.status===429||response.status>=500)&&attempt+1<attempts){await response.body?.cancel();await delay(1000*(attempt+1));continue;}if(/^text\/html(?:;|$)/iu.test(response.headers.get('content-type')||'')||!response.ok&&/^text\/plain(?:;|$)/iu.test(response.headers.get('content-type')||'')){await response.body?.cancel();throw nonJsonResponse(response);}return response;}
   throw new PublishError('REQUEST_FAILED','请求未完成。');}
  async request<T>(suffix:string,method='GET',body?:unknown,binary?:Uint8Array):Promise<T>{check(this.state.jobId,'INVALID_ARGUMENTS','缺少发布任务编号。');const response=await this.requestRaw(`/api/v1/internal/releases/${this.state.jobId}${suffix}`,{method,headers:binary?{'Content-Type':'application/octet-stream','Content-Length':String(binary.byteLength)}:body!==undefined?{'Content-Type':'application/json'}:{},...(binary?{body:new Uint8Array(binary)}:body!==undefined?{body:JSON.stringify(body)}:{})});const data=await boundedResponse(response,suffix==='/snapshot'?MAX_SNAPSHOT+1024*1024:5*1024*1024);if(!response.ok){const code=isRecord(data)&&isRecord(data.error)&&typeof data.error.code==='string'&&/^[A-Z0-9_]{1,80}$/u.test(data.error.code)?data.error.code:'REQUEST_FAILED';throw new PublishError(code,'发布服务拒绝了请求，请检查后台任务状态与会话。');}check(isRecord(data)&&'data'in data,'INVALID_RESPONSE','发布服务响应格式无效。');return data.data as T;}
 }
