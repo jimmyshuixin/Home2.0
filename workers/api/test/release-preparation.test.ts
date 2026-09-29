@@ -29,7 +29,7 @@ beforeEach(async () => {
     list: async <T>(collection: string, options?: { limit?: number; cursor?: string }) => { operations++; return memory.list<T>(collection, options); },
     transaction: async <T>(callback: (tx: Transaction) => Promise<T>) => {
       operations++;
-      const result = await memory.transaction(tx => callback({ get: async <U>(key: string) => { operations++; readKeys.push(key); return tx.get<U>(key); }, put: tx.put.bind(tx), delete: tx.delete.bind(tx) }));
+      const result = await memory.transaction(tx => callback({ get: async <U>(key: string) => { operations++; readKeys.push(key); return tx.get<U>(key); }, getMany: async <U>(keys: readonly string[]) => { if (keys.length) operations++; readKeys.push(...keys); return tx.getMany<U>(keys); }, put: tx.put.bind(tx), delete: tx.delete.bind(tx) }));
       operations++; return result;
     },
   };

@@ -10,6 +10,7 @@ import { dispatchGitHubBuild, dispatchGitHubMedia, dispatchGitHubSocial, verifyG
 import { createMusicHandler } from './music';
 import type { PublicReadCache } from './public-read-cache';
 import { Engagement } from './engagement';
+import { ExpiryMaintenance } from './maintenance-expiry';
 import { verifySocialSyncRunner } from './social-sync-auth';
 const credentialSchema = z.object({ project_id: z.string(), client_email: z.string(), private_key: z.string() });
 const authConfigSchema = z.object({ projectId: z.string(), apiKey: z.string(), adminUid: z.string(), adminUsername: z.string(), adminEmail: z.string(), passwordResetUrl: z.string() }).strict();
@@ -23,13 +24,19 @@ export default {
       }));
       return;
     }
-    if (event.cron !== '0 16 * * *') return;
-    // A daily free Workers Cron performs real deletion; Firestore paid TTL is not used.
+    if (event.cron !== '0 16 * * *' && event.cron !== '7,22,37,52 * * * *') return;
+    // Bounded application cleanup on existing storage; Firestore paid TTL is not used.
     const credential = credentialSchema.parse(parseSecret(env.GOOGLE_SERVICE_ACCOUNT));
     const serviceAccount = { projectId: credential.project_id, clientEmail: credential.client_email, privateKey: credential.private_key };
     const getAccessToken = createGoogleAccessTokenProvider(serviceAccount, { scopes: [GOOGLE_OAUTH_SCOPES.datastore], completedTokenCache: completedGoogleTokens });
     const store = new FirestoreStore({ projectId: env.FIREBASE_PROJECT_ID, databaseId: env.FIRESTORE_DATABASE_ID, edition: 'standard', collectionPrefix: 'v3_test_' }, { getAccessToken, maxAttempts: 2 });
-    ctx.waitUntil(new Engagement(store, env.PRIVACY_SALT, Date.now).cleanup());
+    if (event.cron === '7,22,37,52 * * * *') {
+      // One bounded step per invocation; persisted quotas and leases also cover
+      // administrator-triggered work. No content/media/R2 objects are deleted.
+      ctx.waitUntil(new ExpiryMaintenance(store, Date.now).advance().then(status => {
+        console.info(JSON.stringify({ event: 'expiry_maintenance_step', scheduledAt: new Date(event.scheduledTime).toISOString(), phase: status.phase, result: status.lastResult }));
+      }));
+    } else ctx.waitUntil(new Engagement(store, env.PRIVACY_SALT, Date.now).cleanup());
   },
   async fetch(request, env, ctx) {
     const publicReadCache: PublicReadCache = { cache: await caches.open('xvyin-public-v1'), origin: env.PUBLIC_ORIGIN, waitUntil: promise => ctx.waitUntil(promise) };

@@ -1,6 +1,8 @@
 # 虚静以宁 - 个人主页全栈项目
 
 > 当前 V3 源码位于 `apps/`、`workers/`、`packages/` 和 `scripts/v3/`，生产网站为 [xvyin.com](https://xvyin.com/)。请从 [V3 接手入口](docs/v3/START-HERE.md) 和 [2026-09-29 可靠性升级说明](docs/v3/RELIABILITY-20260929.md) 开始；代码提交、Worker/Pages 部署与公开内容版本分别核验。以下 V1/V2 说明与图片为历史资料。
+第二阶段的后台“维护”功能与运行边界见 [到期记录维护与存储盘点](docs/v3/MAINTENANCE-20260929.md)。
+
 ## 当前index.html中的代码为ver 2.0版本，喜欢ver 1.0可以在version中找到
 这是一个高度可定制、功能丰富的现代化个人主页项目。前端基于原生 HTML/CSS/JavaScript 和 **Vue.js 3** 构建，后端完全由 **Cloudflare Workers** 驱动，构成了一套完整、安全、高性能的 **Serverless** 架构。
 

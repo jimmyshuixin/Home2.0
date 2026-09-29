@@ -2,6 +2,7 @@ import { readBoundedJson, safeStoreExceptionName } from './google-oauth';
 import { BufferedTransaction, deserializeJson, listOptions, makeCursor, MAX_STORED_JSON_BYTES, StoreError, validateKey, validateKeys, type Store, type Transaction } from './types';
 import { mediaCursor, mediaQueryOptions, mediaSortValue, type MediaQueryOptions, type MediaQueryPage } from './media-query';
 import { PUBLIC_COMMENT_CATALOG, publicCommentCatalog, publicCommentCursor, publicCommentQueryOptions, publicCommentSortValue, type PublicComment, type PublicCommentQueryOptions, type PublicCommentQueryPage } from './public-comment-query';
+import { expiredQueryOptions, recordExpiry, type ExpiryCollection, type ExpiredQueryOptions, type ExpiredQueryPage } from './expiry-query';
 
 const FIRESTORE_ORIGIN = 'https://firestore.googleapis.com';
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
@@ -205,6 +206,32 @@ export class FirestoreStore implements Store {
     const items = rows.slice(0, limit);
     return { items, nextCursor: rows.length > limit ? publicCommentCursor(options, items.at(-1)!.sortValue) : null };
   }
+  async queryExpired(collection: ExpiryCollection, options: ExpiredQueryOptions): Promise<ExpiredQueryPage> {
+    const { limit, expiresBefore } = expiredQueryOptions(collection, options);
+    const result = await this.#request('runQuery', { structuredQuery: {
+      select: { fields: [{ fieldPath: 'expires_at' }] },
+      from: [{ collectionId: `${this.#prefix}${collection}` }],
+      where: { fieldFilter: { field: { fieldPath: 'expires_at' }, op: 'LESS_THAN_OR_EQUAL', value: { integerValue: String(expiresBefore) } } },
+      orderBy: [{ field: { fieldPath: 'expires_at' }, direction: 'ASCENDING' }], limit: limit + 1,
+    } }, 128 * 1024);
+    if (!Array.isArray(result) || !result.every(isObject)) throw new StoreError('STORE_UNAVAILABLE');
+    const prefix = `${this.#documents}/${this.#prefix}${collection}/`;
+    const rows = result.filter(row => 'document' in row).map(row => {
+      if (!isObject(row.document) || typeof row.document.name !== 'string' || !row.document.name.startsWith(prefix) || !isObject(row.document.fields) || !isObject(row.document.fields.expires_at)) throw new StoreError('STORE_UNAVAILABLE');
+      const id = row.document.name.slice(prefix.length), rawExpiry = row.document.fields.expires_at.integerValue;
+      validateKey(`${collection}/${id}`);
+      if (typeof rawExpiry !== 'string' || !/^[1-9]\d*$/u.test(rawExpiry)) throw new StoreError('STORE_UNAVAILABLE');
+      const expiresAt = Number(rawExpiry);
+      if (recordExpiry({ expiresAt }) === null || expiresAt > expiresBefore) throw new StoreError('STORE_UNAVAILABLE');
+      return { id, expiresAt };
+    });
+    if (rows.length > limit + 1) throw new StoreError('STORE_UNAVAILABLE');
+    for (let index = 1; index < rows.length; index++) {
+      const previous = rows[index - 1]!, current = rows[index]!;
+      if (current.expiresAt < previous.expiresAt || current.expiresAt === previous.expiresAt && current.id <= previous.id) throw new StoreError('STORE_UNAVAILABLE');
+    }
+    return { items: rows.slice(0, limit), hasMore: rows.length > limit };
+  }
   async transaction<T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
     let retryTransaction: string | undefined;
     for (let attempt = 0; attempt < this.#maxAttempts; attempt++) {
@@ -215,11 +242,11 @@ export class FirestoreStore implements Store {
         if (!isObject(begin) || typeof begin.transaction !== 'string' || !/^[A-Za-z0-9+/=_-]{1,4096}$/u.test(begin.transaction)) throw new StoreError('STORE_UNAVAILABLE');
         transaction = begin.transaction;
         const token = transaction;
-        tx = new BufferedTransaction(key => this.#read(key, token));
+        tx = new BufferedTransaction(key => this.#read(key, token), keys => this.#readMany(keys, token));
         const result = await callback(tx);
         const writes = tx.finish().map(write => write.payload === null
           ? { delete: this.#name(write.key) }
-          : { update: { name: this.#name(write.key), fields: { schema_version: { integerValue: '1' }, record_json: { stringValue: write.payload }, ...(write.key.startsWith('media_catalog/') ? Object.fromEntries((['created', 'name', 'size'] as const).map(sort => [`sort_${sort}`, { stringValue: mediaSortValue(JSON.parse(write.payload!), sort) }])) : {}), ...(write.key.startsWith(`${PUBLIC_COMMENT_CATALOG}/`) ? { sort_target: { stringValue: publicCommentSortValue(JSON.parse(write.payload!) as PublicComment) } } : {}) } } });
+          : { update: { name: this.#name(write.key), fields: { schema_version: { integerValue: '1' }, record_json: { stringValue: write.payload }, ...(typeof write.expiresAt === 'number' ? { expires_at: { integerValue: String(write.expiresAt) } } : {}), ...(write.key.startsWith('media_catalog/') ? Object.fromEntries((['created', 'name', 'size'] as const).map(sort => [`sort_${sort}`, { stringValue: mediaSortValue(JSON.parse(write.payload!), sort) }])) : {}), ...(write.key.startsWith(`${PUBLIC_COMMENT_CATALOG}/`) ? { sort_target: { stringValue: publicCommentSortValue(JSON.parse(write.payload!) as PublicComment) } } : {}) } } });
         if (writes.length > 500) throw new StoreError('STORE_INVALID_VALUE');
         // A transport error here is ambiguous. Only an explicit ABORTED response is retried.
         const committed = await this.#request('commit', { writes, transaction }, 512 * 1024);

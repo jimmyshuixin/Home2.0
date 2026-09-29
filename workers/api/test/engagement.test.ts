@@ -173,7 +173,7 @@ describe('free read protection and small cleanup metadata', () => {
   it('cleanup reads only tiny expiry records, without deserializing raw visit payloads', async () => {
     await engagement.visit(request(), visit(), snapshot);
     const original = store.transaction.bind(store), reads: string[] = [], many = vi.spyOn(store, 'getMany');
-    vi.spyOn(store, 'transaction').mockImplementation(callback => original(tx => callback({ get: async key => { reads.push(key); return tx.get(key); }, put: tx.put.bind(tx), delete: tx.delete.bind(tx) })));
+    vi.spyOn(store, 'transaction').mockImplementation(callback => original(tx => callback({ get: async key => { reads.push(key); return tx.get(key); }, getMany: async keys => { reads.push(...keys); return tx.getMany(keys); }, put: tx.put.bind(tx), delete: tx.delete.bind(tx) })));
     await engagement.cleanup();
     expect(many).toHaveBeenCalledTimes(1); expect(many.mock.calls[0]![0]).toHaveLength(31);
     expect(many.mock.calls[0]![0].every(key => key.startsWith('analytics_raw_meta/'))).toBe(true); expect(reads).toEqual([]);

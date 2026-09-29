@@ -3,7 +3,7 @@ name: V3 code checks
 on:
   pull_request:
   push:
-    branches: [main, codex/v3-production, codex/reliability-20260929]
+    branches: [main, 'codex/**']
   workflow_dispatch:
 
 permissions:

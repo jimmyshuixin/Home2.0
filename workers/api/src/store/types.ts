@@ -1,14 +1,18 @@
 import { mediaCatalog, type MediaQueryOptions, type MediaQueryPage } from './media-query';
 import { PUBLIC_COMMENT_CATALOG, publicCommentCatalog, type PublicCommentQueryOptions, type PublicCommentQueryPage } from './public-comment-query';
+import { expiryProjection, type ExpiryCollection, type ExpiredQueryOptions, type ExpiredQueryPage } from './expiry-query';
 /** Private server-side storage. Callers never expose records without public projection. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export interface Transaction {
   /** All reads must finish before put/delete (Firestore transaction requirement). */
   get<T>(key: string): Promise<T | null>;
+  /** Same transaction snapshot, bounded to 100 keys, preserving order and duplicates. */
+  getMany<T>(keys: readonly string[]): Promise<Array<T | null>>;
   put(key: string, value: unknown): void;
   delete(key: string): void;
 }
 export interface Store {
+  queryExpired?(collection: ExpiryCollection, options: ExpiredQueryOptions): Promise<ExpiredQueryPage>;
   queryMedia?<T>(options: MediaQueryOptions): Promise<MediaQueryPage<T>>;
   queryPublicComments?(options: PublicCommentQueryOptions): Promise<PublicCommentQueryPage>;
   get<T>(key: string): Promise<T | null>;
@@ -121,14 +125,14 @@ export class SerialQueue {
   }
 }
 
-export type BufferedWrite = { key: string; payload: string | null };
+export type BufferedWrite = { key: string; payload: string | null; expiresAt?: number | null };
 /** Gives all adapters the same read-before-write and post-callback invalidation semantics. */
 export class BufferedTransaction implements Transaction {
   readonly #writes = new Map<string, BufferedWrite>();
   #writing = false;
   #reading = 0;
   #closed = false;
-  constructor(private readonly read: (key: string) => Promise<string | null>) {}
+  constructor(private readonly read: (key: string) => Promise<string | null>, private readonly readMany?: (keys: readonly string[]) => Promise<Array<string | null>>) {}
   #assertOpen(): void { if (this.#closed) throw new StoreError('STORE_TRANSACTION_CLOSED'); }
   async get<T>(key: string): Promise<T | null> {
     this.#assertOpen(); validateKey(key);
@@ -137,13 +141,23 @@ export class BufferedTransaction implements Transaction {
     try { const payload = await this.read(key); return payload === null ? null : deserializeJson<T>(payload); }
     finally { this.#reading--; }
   }
+  async getMany<T>(keys: readonly string[]): Promise<Array<T | null>> {
+    this.#assertOpen(); const checked = validateKeys(keys);
+    if (this.#writing) throw new StoreError('STORE_TRANSACTION_ORDER', '事务必须先完成全部读取再写入');
+    this.#reading++;
+    try {
+      const values = this.readMany ? await this.readMany(checked) : await Promise.all(checked.map(key => this.read(key)));
+      if (values.length !== checked.length) throw new StoreError('STORE_UNAVAILABLE');
+      return values.map(value => value === null ? null : deserializeJson<T>(value));
+    } finally { this.#reading--; }
+  }
   #startWrite(key: string): void {
     this.#assertOpen(); validateKey(key);
     if (this.#reading) throw new StoreError('STORE_TRANSACTION_ORDER', '事务必须先等待全部读取完成');
     this.#writing = true;
   }
   put(key: string, value: unknown): void {
-    this.#startWrite(key); this.#writes.set(key, { key, payload: serializeJson(value) });
+    this.#startWrite(key); this.#writes.set(key, { key, payload: serializeJson(value), expiresAt: expiryProjection(key, value) });
     if (key.startsWith('public_comments/')) {
       const id = key.slice('public_comments/'.length), projected = publicCommentCatalog(value, id), catalogKey = `${PUBLIC_COMMENT_CATALOG}/${id}`;
       this.#writes.set(catalogKey, { key: catalogKey, payload: projected ? serializeJson(projected) : null });

@@ -20,6 +20,8 @@ import { AnalyticsQuerySchema, EngagementTargetSchema, LikeInputSchema, VisitInp
 import { cachedLikeCount, Engagement, guardEngagementRequest } from './engagement';
 import { readBilibiliProfile, type BilibiliFetch } from './bilibili';
 import { SocialPublicSync } from './social-sync';
+import { ExpiryMaintenance } from './maintenance-expiry';
+import { StorageInventory } from './storage-inventory';
 import type { SocialSyncIdentity } from './social-sync-auth';
 import { unavailableGitHubProfile } from './github-public';
 import { unavailableDouyinProfile } from './douyin-public';
@@ -50,6 +52,8 @@ export function createApi(runtime: Runtime) {
   const engagement = new Engagement(runtime.store, runtime.privacySalt, runtime.now);
   const social = new SocialPublicSync(runtime.store, runtime.now, runtime.publicReadCache);
   const publicComments = new PublicComments(runtime.store);
+  const expiryMaintenance = new ExpiryMaintenance(runtime.store, runtime.now);
+  const storageInventory = new StorageInventory(runtime.store, runtime.bucket, runtime.now);
   const publicPurge = ({ keys, recovery, ...job }: PurgeJob) => ({ ...job, totalKeys: keys.length, reservedBytes: recovery?.reservedBytes || 0, recovery: !!recovery, totalUploads: recovery?.uploads.length || 0, abortedUploads: recovery?.abortedUploads || 0 });
   const response = (data: unknown, requestId: string, extra: Record<string, unknown> = {}, status = 200) => new Response(JSON.stringify({ data, meta: { requestId, schemaVersion: 1, ...extra } }), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
   const input = async (request: Request, max?: number) => { const value = await boundedJson(request, max); const problem = boundedTreeProblem(value, 24, 15000); assert(!problem, 'INVALID_CONTENT_TREE', 422, problem || '内容结构无效'); return value; };
@@ -129,6 +133,20 @@ export function createApi(runtime: Runtime) {
   app.post('/api/v1/auth/reset/request', async c => { await limit(c.req.raw, 'password-reset', 3, 3600_000); const values = z.object({ username: z.string().min(1).max(128) }).strict().parse(await input(c.req.raw, 4096)); await runtime.auth.requestPasswordReset(values); return response({ accepted: true }, c.get('requestId')); });
   app.post('/api/v1/auth/reset/confirm', async c => { await limit(c.req.raw, 'reset-confirm', 6, 15 * 60_000); const values = z.object({ code: z.string().min(1).max(4096), newPassword: z.string().max(512) }).strict().parse(await input(c.req.raw, 8192)); const result = await runtime.auth.confirmPasswordReset(values); await sessions.revokeAll(result.uid); c.header('set-cookie', clearPreviewCookie, { append: true }); return c.json({ data: { changed: true }, meta: { requestId: c.get('requestId'), schemaVersion: 1 } }); });
   app.use('/api/v1/admin/*', async (c, next) => { c.set('session', await sessions.require(c.req.raw, !['GET', 'HEAD'].includes(c.req.method))); await next(); });
+  app.get('/api/v1/admin/maintenance/expiry', async c => response(await expiryMaintenance.getStatus(), c.get('requestId')));
+  app.post('/api/v1/admin/maintenance/expiry/advance', async c => {
+    z.object({}).strict().parse(await input(c.req.raw, 1024));
+    return response(await expiryMaintenance.advance(), c.get('requestId'));
+  });
+  app.get('/api/v1/admin/maintenance/storage', async c => response(await storageInventory.getStatus(), c.get('requestId')));
+  app.post('/api/v1/admin/maintenance/storage/start', async c => {
+    const values = z.object({ expectedVersion: z.number().int().nonnegative().safe(), keepRecent: z.number().int().min(3).max(10).optional() }).strict().parse(await input(c.req.raw, 1024));
+    return response(await storageInventory.start(values), c.get('requestId'));
+  });
+  for (const operation of ['advance', 'pause'] as const) app.post(`/api/v1/admin/maintenance/storage/${operation}`, async c => {
+    const values = z.object({ jobId: z.string().uuid(), expectedVersion: z.number().int().nonnegative().safe() }).strict().parse(await input(c.req.raw, 1024));
+    return response(await storageInventory[operation](values), c.get('requestId'));
+  });
   for (const collection of ['creations', 'albums', 'fitness', 'playlists']) {
     app.get(`/api/v1/admin/${collection}`, async c => { const page = await runtime.store.list<DraftRecord>(collection, { limit: 50, cursor: c.req.query('cursor') }); return response(await publicRecordState(collection, page.items.map(item => item.data)), c.get('requestId'), { nextCursor: page.nextCursor }); });
     app.get(`/api/v1/admin/${collection}/:id`, async c => { IdSchema.parse(c.req.param('id')); const value = await runtime.store.get<DraftRecord>(`${collection}/${c.req.param('id')}`); assert(value, 'NOT_FOUND', 404, '内容不存在'); return response((await publicRecordState(collection, [value]))[0], c.get('requestId')); });
@@ -243,6 +261,10 @@ export function createApi(runtime: Runtime) {
     const clientKey = z.string().uuid().parse(c.req.header('idempotency-key')), hash = await sha256(JSON.stringify(values)), id = await sha256(`${kind}:${clientKey}`), collection = kind === 'comment' ? 'comments' : 'contacts';
     const receipt = await runtime.store.transaction(async tx => {
       const existing = await tx.get<{ hash: string; receipt: unknown }>(`idempotency/${id}`); if (existing) { assert(existing.hash === hash, 'IDEMPOTENCY_CONFLICT', 409, '重复请求的内容不一致'); return existing.receipt; }
+      // A receipt may have expired while its business record remains. Never
+      // overwrite a moderated comment/contact or count it again after cleanup.
+      const previousSubmission = await tx.get(`${collection}/${id}`);
+      assert(!previousSubmission, 'IDEMPOTENCY_EXPIRED', 409, '这次提交已处理且重试凭据已到期，请刷新页面后再操作');
       const statistics = await readStatistics(tx);
       const { challengeToken: _token, website: _website, startedAt: _started, ...safeValues } = values;
       const at = new Date(runtime.now()).toISOString(); const receipt = kind === 'comment' ? { receiptId: id, status: 'pending' } : { receiptId: id };

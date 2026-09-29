@@ -1,10 +1,12 @@
 import { BufferedTransaction, deserializeJson, listOptions, makeCursor, SerialQueue, serializeJson, validateKey, validateKeys, type Store, type Transaction } from './types';
 import { mediaCursor, mediaQueryOptions, mediaSortValue, type MediaQueryOptions, type MediaQueryPage } from './media-query';
 import { PUBLIC_COMMENT_CATALOG, publicCommentCursor, publicCommentQueryOptions, publicCommentSortValue, type PublicComment, type PublicCommentQueryOptions, type PublicCommentQueryPage } from './public-comment-query';
+import { expiredQueryOptions, type ExpiryCollection, type ExpiredQueryOptions, type ExpiredQueryPage } from './expiry-query';
 
 /** Unit-test adapter only. Production and local development must select persistent storage. */
 export class MemoryStore implements Store {
   readonly #records = new Map<string, string>();
+  readonly #expiries = new Map<string, number>();
   readonly #queue = new SerialQueue();
   constructor(seed: Record<string, unknown> = {}) {
     for (const [key, value] of Object.entries(seed)) { validateKey(key); this.#records.set(key, serializeJson(value)); }
@@ -27,6 +29,16 @@ export class MemoryStore implements Store {
       }).filter(row => !after || (row.sortValue > after ? 1 : row.sortValue < after ? -1 : 0) * direction > 0)
         .sort((a, b) => (a.sortValue < b.sortValue ? -1 : a.sortValue > b.sortValue ? 1 : 0) * direction).slice(0, limit + 1);
       const items = rows.slice(0, limit); return { items, nextCursor: rows.length > limit ? mediaCursor(options, items.at(-1)!.sortValue) : null };
+    });
+  }
+  queryExpired(collection: ExpiryCollection, options: ExpiredQueryOptions): Promise<ExpiredQueryPage> {
+    const { limit, expiresBefore } = expiredQueryOptions(collection, options);
+    return this.#queue.run(() => {
+      const prefix = `${collection}/`;
+      const rows = [...this.#expiries.entries()].filter(([key, expiry]) => key.startsWith(prefix) && expiry <= expiresBefore)
+        .map(([key, expiresAt]) => ({ id: key.slice(prefix.length), expiresAt }))
+        .sort((a, b) => a.expiresAt - b.expiresAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, limit + 1);
+      return { items: rows.slice(0, limit), hasMore: rows.length > limit };
     });
   }
   queryPublicComments(options: PublicCommentQueryOptions): Promise<PublicCommentQueryPage> {
@@ -55,8 +67,9 @@ export class MemoryStore implements Store {
       const tx = new BufferedTransaction(async key => this.#records.get(key) ?? null);
       try {
         const result = await callback(tx);
-        for (const { key, payload } of tx.finish()) {
+        for (const { key, payload, expiresAt } of tx.finish()) {
           if (payload === null) this.#records.delete(key); else this.#records.set(key, payload);
+          if (payload !== null && typeof expiresAt === 'number') this.#expiries.set(key, expiresAt); else this.#expiries.delete(key);
         }
         return result;
       } catch (error) { tx.discard(); throw error; }

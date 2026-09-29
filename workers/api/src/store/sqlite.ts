@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { BufferedTransaction, deserializeJson, listOptions, makeCursor, SerialQueue, StoreError, validateKey, validateKeys, type Store, type Transaction } from './types';
 import { mediaCursor, mediaQueryOptions, mediaSortValue, type MediaQueryOptions, type MediaQueryPage } from './media-query';
 import { publicCommentCursor, publicCommentQueryOptions, publicCommentSortValue, type PublicComment, type PublicCommentQueryOptions, type PublicCommentQueryPage } from './public-comment-query';
+import { expiredQueryOptions, type ExpiryCollection, type ExpiredQueryOptions, type ExpiredQueryPage } from './expiry-query';
 
 const fileQueues = new Map<string, { queue: SerialQueue; references: number }>();
 function isBusy(error: unknown): boolean {
@@ -28,6 +29,8 @@ export class SqliteStore implements Store {
       this.#db.exec('PRAGMA journal_mode=WAL');
       this.#db.exec('PRAGMA synchronous=FULL');
       this.#db.exec('CREATE TABLE IF NOT EXISTS documents (collection TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (collection, id)) WITHOUT ROWID');
+      if (!this.#db.prepare('PRAGMA table_info(documents)').all().some(column => column.name === 'expires_at')) this.#db.exec('ALTER TABLE documents ADD COLUMN expires_at INTEGER');
+      this.#db.exec('CREATE INDEX IF NOT EXISTS documents_expiry ON documents(collection, expires_at, id)');
       this.#db.function('media_sort', { deterministic: true }, (payload, sort) => mediaSortValue(JSON.parse(String(payload)), String(sort) as MediaQueryOptions['sort']));
       this.#db.function('public_comment_sort', { deterministic: true }, payload => publicCommentSortValue(JSON.parse(String(payload)) as PublicComment));
       const canonical = path === ':memory:' ? null : realpathSync(path);
@@ -109,6 +112,20 @@ export class SqliteStore implements Store {
       } catch (error) { throw storageError(error); }
     });
   }
+  queryExpired(collection: ExpiryCollection, options: ExpiredQueryOptions): Promise<ExpiredQueryPage> {
+    const { limit, expiresBefore } = expiredQueryOptions(collection, options);
+    return this.#queue.run(() => {
+      this.#assertOpen();
+      try {
+        const rows = this.#db.prepare('SELECT id,expires_at FROM documents WHERE collection=? AND expires_at<=? ORDER BY expires_at ASC,id COLLATE BINARY ASC LIMIT ?').all(collection, expiresBefore, limit + 1);
+        const items = rows.slice(0, limit).map(row => {
+          if (typeof row.id !== 'string' || typeof row.expires_at !== 'number') throw new StoreError('STORE_UNAVAILABLE');
+          return { id: row.id, expiresAt: row.expires_at };
+        });
+        return { items, hasMore: rows.length > limit };
+      } catch (error) { throw storageError(error); }
+    });
+  }
   transaction<T>(callback: (transaction: Transaction) => Promise<T>): Promise<T> {
     return this.#queue.run(async () => {
       this.#assertOpen();
@@ -121,11 +138,11 @@ export class SqliteStore implements Store {
           inCallback = true;
           const result = await callback(tx);
           inCallback = false;
-          const upsert = this.#db.prepare('INSERT INTO documents(collection,id,payload) VALUES(?,?,?) ON CONFLICT(collection,id) DO UPDATE SET payload=excluded.payload');
+          const upsert = this.#db.prepare('INSERT INTO documents(collection,id,payload,expires_at) VALUES(?,?,?,?) ON CONFLICT(collection,id) DO UPDATE SET payload=excluded.payload,expires_at=excluded.expires_at');
           const remove = this.#db.prepare('DELETE FROM documents WHERE collection=? AND id=?');
           for (const write of tx.finish()) {
             const { collection, id } = validateKey(write.key);
-            if (write.payload === null) remove.run(collection, id); else upsert.run(collection, id, write.payload);
+            if (write.payload === null) remove.run(collection, id); else upsert.run(collection, id, write.payload, write.expiresAt ?? null);
           }
           this.#db.exec('COMMIT');
           return result;
