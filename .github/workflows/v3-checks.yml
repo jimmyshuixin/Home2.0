@@ -47,6 +47,9 @@ jobs:
           package-manager-cache: false
       - run: sudo apt-get update && sudo apt-get install --no-install-recommends --yes ffmpeg
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare Nuxt configuration required by imported web modules
+        working-directory: apps/web
+        run: npm exec -- nuxt prepare
       - name: Run bounded-concurrency tests without a shared Nuxt build
         run: npm run test:unit
       - name: Check anonymous collector transformations without network access
@@ -66,6 +69,9 @@ jobs:
           node-version: '22.23.2'
           package-manager-cache: false
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare Nuxt configuration before importing the publication runner
+        working-directory: apps/web
+        run: npm exec -- nuxt prepare
       - name: Exercise real static generation, private preview, activation and rollback locally
         run: npm run test:publication
       # This job owns its checkout and Nuxt output. No production credentials,
