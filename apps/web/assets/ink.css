@@ -92,6 +92,21 @@ html { scrollbar-width: thin; scrollbar-color: #a7aa9e var(--paper); }
 @media (min-width: 1800px) {
   .ink-backdrop:not(.interior-backdrop) { --art-width: 1800px; height: 1200px; }
 }
+@media (min-width: 901px) {
+  /* A quiet landscape counterbalances the portrait without changing its composition. */
+  .ink-backdrop:not(.interior-backdrop)::before {
+    content: '';
+    position: absolute; top: 32px;
+    left: max(0px, calc((100% - var(--art-width)) / 2));
+    width: min(56vw, 1040px); height: 650px;
+    background: url('/brand/ink-landscape.webp') right top / auto 760px no-repeat;
+    transform: scaleX(-1);
+    opacity: .34;
+    mix-blend-mode: multiply;
+    mask-image: linear-gradient(90deg, transparent, #000 24%, #000 82%, transparent), linear-gradient(transparent, #000 12%, #000 70%, transparent);
+    mask-composite: intersect;
+  }
+}
 @media (max-width: 1200px) {
   .ink-shell, .ink-shell.freepaper-shell, .ink-shell.wrap:not(.freepaper-shell) { width: calc(100% - 80px); }
   .ink-shell.wrap .topbar nav { gap: 32px; font-size: 18px; }
