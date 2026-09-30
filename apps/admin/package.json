@@ -10,6 +10,9 @@
   },
   "dependencies": {
     "@noble/hashes": "^2.0.1",
+    "@tiptap/core": "3.31.3",
+    "@tiptap/pm": "3.31.3",
+    "@tiptap/starter-kit": "3.31.3",
     "@xvyin/contracts": "*",
     "vue": "3.5.40",
     "vue-router": "5.2.0"

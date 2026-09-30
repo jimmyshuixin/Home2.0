@@ -12,7 +12,8 @@ const indexable = process.env.XVYIN_INDEXABLE === 'true' && publicOrigin === 'ht
 const generated = resolve(root, '.data/site.json')
 mkdirSync(dirname(generated), { recursive: true })
 writeFileSync(generated, JSON.stringify(snapshot))
-const routes = ['/', '/about', '/creations', '/photography', '/fitness', '/guestbook', '/contact', '/search', '/subscribe',
+const routes = ['/', '/about', '/creations', '/photography', '/fitness', '/guestbook', '/contact', '/search', '/subscribe', '/topics',
+  ...(snapshot.settings.topics || []).map(topic => `/topics/${topic.slug}`),
   ...snapshot.creations.map((entry) => `/creations/${entry.slug}`),
   ...snapshot.albums.map((album) => `/photography/${album.slug}`)]
 const generatedPublic = resolve(root, '.data/public')

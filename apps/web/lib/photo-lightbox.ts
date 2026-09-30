@@ -4,6 +4,13 @@ export type PhotoSlide = {
   src: string; width: number; height: number; alt: string; photoIndex: number
   srcset?: string
 }
+export type PhotoContext = { albumId: string; photoId?: string; albumTitle: string; albumSlug: string }
+export function photoViewerTarget(photo?: Photo, albumId?: string, contexts?: Record<string, PhotoContext>) {
+  if (!photo) return undefined
+  const context = contexts?.[photo.id || photo.assetId]
+  const parentId = context ? context.albumId : albumId, id = context ? context.photoId : photo.id
+  return parentId && id ? { type: 'photo' as const, id, parentId } : undefined
+}
 
 /** Reuse public derivatives only. Do not pass an asset/photo object to the viewer. */
 export function photoLightboxSlides(

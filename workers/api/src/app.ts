@@ -6,6 +6,7 @@ import { ApiError, assert } from './errors';
 import { boundedJson, assertOrigin, cookieValue, rateLimit, sha256 } from './security';
 import { Sessions, type Session } from './sessions';
 import { Records, readStatistics, writeStatisticsDelta, type DraftRecord } from './records';
+import { revisionHistoryPage } from './revision-history';
 import { StoreError, type Store } from './store/types';
 import { PublicComments } from './store/public-comments';
 import { Media, type MediaAsset } from './media';
@@ -149,6 +150,14 @@ export function createApi(runtime: Runtime) {
     return response(await storageInventory[operation](values), c.get('requestId'));
   });
   for (const collection of ['creations', 'albums', 'fitness', 'playlists']) {
+    app.get(`/api/v1/admin/${collection}/:id/revisions`, async c => {
+      const page = await revisionHistoryPage(runtime.store, collection, c.req.param('id'), c.req.query('cursor'));
+      return response(page.items, c.get('requestId'), { nextCursor: page.nextCursor, historyComplete: page.historyComplete, scanned: page.scanned });
+    });
+    app.post(`/api/v1/admin/${collection}/:id/restore`, async c => {
+      const values = z.object({ revisionId: IdSchema, expectedVersion: z.number().int().positive().safe() }).strict().parse(await input(c.req.raw, 2048));
+      return response(await records.restore(collection, schemaFor(collection), c.req.param('id'), values.revisionId, values.expectedVersion, c.get('session').uid), c.get('requestId'));
+    });
     app.get(`/api/v1/admin/${collection}`, async c => { const page = await runtime.store.list<DraftRecord>(collection, { limit: 50, cursor: c.req.query('cursor') }); return response(await publicRecordState(collection, page.items.map(item => item.data)), c.get('requestId'), { nextCursor: page.nextCursor }); });
     app.get(`/api/v1/admin/${collection}/:id`, async c => { IdSchema.parse(c.req.param('id')); const value = await runtime.store.get<DraftRecord>(`${collection}/${c.req.param('id')}`); assert(value, 'NOT_FOUND', 404, '内容不存在'); return response((await publicRecordState(collection, [value]))[0], c.get('requestId')); });
     app.post(`/api/v1/admin/${collection}`, async c => { const values = z.object({ draft: z.unknown() }).strict().parse(await input(c.req.raw)); return response(await records.save(collection, schemaFor(collection), values.draft, c.get('session').uid), c.get('requestId'), {}, 201); });

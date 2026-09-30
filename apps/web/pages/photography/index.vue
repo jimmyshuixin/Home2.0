@@ -5,10 +5,12 @@ const PhotoMap = defineAsyncComponent({
   loadingComponent: { render: () => h('p', { role: 'status' }, '正在展开地图…') },
   errorComponent: { render: () => h('div', { role: 'status' }, [h('p', '地图暂时无法加载，相册仍可浏览。'), h('button', { type: 'button', onClick: () => window.location.reload() }, '刷新后重试')]) },
 })
-const route = useRoute(), router = useRouter(), view = ref<'albums' | 'map'>('albums')
-onMounted(() => { view.value = route.query.view === 'map' ? 'map' : 'albums' })
-watch(() => route.query.view, value => { view.value = value === 'map' ? 'map' : 'albums' })
-function changeView(next: 'albums' | 'map') { view.value = next; router.replace({ query: { ...route.query, view: next === 'map' ? 'map' : undefined } }) }
+type PhotographyView = 'albums' | 'photos' | 'map'
+const route = useRoute(), router = useRouter(), view = ref<PhotographyView>('albums')
+const queryView = (value: unknown): PhotographyView => value === 'map' || value === 'photos' ? value : 'albums'
+onMounted(() => { view.value = queryView(route.query.view) })
+watch(() => route.query.view, value => { view.value = queryView(value) })
+function changeView(next: PhotographyView) { view.value = next; router.replace({ query: { ...route.query, view: next === 'albums' ? undefined : next } }) }
 const albums = ordered(site.albums).map((album) => ({
   ...album,
   cover: assetVariant(album.coverAssetId || album.photos[0]?.assetId)
@@ -22,10 +24,12 @@ useSeoMeta({ title: '摄影 · 虚宁', description: '用镜头，收藏片刻�
   </section>
   <div class="photography-views" role="group" aria-label="摄影浏览方式">
     <button type="button" :aria-pressed="view === 'albums'" aria-controls="photography-content" @click="changeView('albums')">相册</button>
+    <button type="button" :aria-pressed="view === 'photos'" aria-controls="photography-content" @click="changeView('photos')">全部照片</button>
     <button type="button" :aria-pressed="view === 'map'" aria-controls="photography-content" @click="changeView('map')">地图</button>
   </div>
   <div id="photography-content">
   <PhotoMap v-if="view === 'map'" :albums="albums" />
+  <PhotoExplorer v-else-if="view === 'photos'" :albums="albums" />
   <div v-else-if="albums.length" class="album-list">
     <article v-for="album in albums" :key="album.id" class="album-card">
       <NuxtLink :to="`/photography/${album.slug}`">

@@ -7,7 +7,7 @@ export interface DraftRecord<T = unknown> {
   id: string; version: number; draft: T; visibility: 'draft' | 'published' | 'hidden';
   draftRevisionId: string; lastPublishedRevisionId: string | null; createdAt: string; updatedAt: string;
 }
-export interface Revision<T = unknown> { id: string; entryId: string; collection: string; data: T; createdAt: string; authorUid: string; version: number }
+export interface Revision<T = unknown> { id: string; entryId: string; collection: string; data: T; createdAt: string; authorUid: string; version: number; previousRevisionId?: string | null; restoredFromRevisionId?: string }
 export const STATISTIC_KEYS = ['creations', 'albums', 'fitness', 'playlists', 'commentsPending', 'contacts'] as const;
 export type StatisticKey = typeof STATISTIC_KEYS[number];
 const count = z.number().int().nonnegative().safe();
@@ -39,7 +39,7 @@ export async function installStatisticsProjection(store: Store, counts: Statisti
 }
 export class Records {
   constructor(private readonly store: Store, private readonly now: () => number) {}
-  async save<T>(collection: string, schema: z.ZodType<T>, input: unknown, authorUid: string, id: string = crypto.randomUUID(), expectedVersion = 0): Promise<DraftRecord<T>> {
+  async save<T>(collection: string, schema: z.ZodType<T>, input: unknown, authorUid: string, id: string = crypto.randomUUID(), expectedVersion = 0, restoredFromRevisionId?: string): Promise<DraftRecord<T>> {
     IdSchema.parse(id); const draft = schema.parse(input), timestamp = new Date(this.now()).toISOString(), revisionId = crypto.randomUUID();
     const mediaEpoch = await validateDraftMedia(this.store, draft, this.now());
     return this.store.transaction(async tx => {
@@ -50,10 +50,19 @@ export class Records {
       const statistics = counted ? await readStatistics(tx) : null;
       const next: DraftRecord<T> = { id, version: expectedVersion + 1, draft, visibility: existing?.visibility || 'draft', draftRevisionId: revisionId, lastPublishedRevisionId: existing?.lastPublishedRevisionId || null, createdAt: existing?.createdAt || timestamp, updatedAt: timestamp };
       tx.put(`${collection}/${id}`, next);
-      tx.put(`revisions/${revisionId}`, { id: revisionId, entryId: id, collection, data: draft, createdAt: timestamp, authorUid, version: next.version } satisfies Revision<T>);
-      tx.put(`audit/${crypto.randomUUID()}`, { action: 'draft_saved', collection, entryId: id, revisionId, authorUid, at: timestamp });
+      tx.put(`revisions/${revisionId}`, { id: revisionId, entryId: id, collection, data: draft, createdAt: timestamp, authorUid, version: next.version, previousRevisionId: existing?.draftRevisionId ?? null, ...(restoredFromRevisionId ? { restoredFromRevisionId } : {}) } satisfies Revision<T>);
+      tx.put(`audit/${crypto.randomUUID()}`, { action: restoredFromRevisionId ? 'draft_restored' : 'draft_saved', collection, entryId: id, revisionId, authorUid, at: timestamp, ...(restoredFromRevisionId ? { restoredFromRevisionId } : {}) });
       if (counted) writeStatisticsDelta(tx, statistics, { [collection]: 1 }, timestamp);
       return next;
     });
+  }
+  /** Restore is a new, version-checked draft. It never changes the public release. */
+  async restore<T>(collection: string, schema: z.ZodType<T>, id: string, revisionId: string, expectedVersion: number, authorUid: string): Promise<DraftRecord<T>> {
+    IdSchema.parse(id); IdSchema.parse(revisionId);
+    const [record, revision] = await this.store.getMany<DraftRecord<T> | Revision<T>>([`${collection}/${id}`, `revisions/${revisionId}`]);
+    assert(record && 'draft' in record, 'NOT_FOUND', 404, '内容不存在');
+    assert(revision && 'data' in revision && revision.id === revisionId && revision.collection === collection && revision.entryId === id && Number.isSafeInteger(revision.version) && revision.version > 0 && revision.version <= record.version, 'NOT_FOUND', 404, '历史版本不属于这条内容');
+    assert(record.version === expectedVersion && expectedVersion > 0, 'VERSION_CONFLICT', 409, '内容已在另一页面更新，请重新载入并合并');
+    return this.save(collection, schema, revision.data, authorUid, id, expectedVersion, revisionId);
   }
 }

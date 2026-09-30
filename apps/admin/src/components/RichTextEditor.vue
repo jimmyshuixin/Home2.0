@@ -1,135 +1,58 @@
 <script setup lang="ts">
-import { onMounted, ref, watch, useId } from 'vue';
-import { SafeHrefSchema, type RichTextDocument, type RichInline, type RichTextMark, type RichParagraph, type RichList } from '@xvyin/contracts';
+import { onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
+import { Editor, Extension } from '@tiptap/core';
+import { Plugin } from '@tiptap/pm/state';
+import { Fragment, Slice } from '@tiptap/pm/model';
+import { closeHistory } from '@tiptap/pm/history';
+import { RichTextDocumentSchema, SafeHrefSchema, type RichTextDocument } from '@xvyin/contracts';
+import { compatibleExtensions, fromEditorDocument, toEditorDocument } from '../richtext-compatibility';
 import { plainTextParagraphs } from '../plain-text';
 const props = defineProps<{ modelValue: RichTextDocument; label?: string }>();
 const emit = defineEmits<{ 'update:modelValue': [value: RichTextDocument] }>();
-const editor = ref<HTMLDivElement>();
-const link = ref('');
-const issue = ref('');
-const linkId = useId();
-let selection: Range | null = null;
-let lastValue = '';
-
-function inlineNodes(nodes: RichInline[]): DocumentFragment {
-  const fragment = document.createDocumentFragment();
-  for (const node of nodes) {
-    if (node.type === 'hardBreak') { fragment.append(document.createElement('br')); continue; }
-    let element: Node = document.createTextNode(node.text);
-    for (const mark of node.marks ?? []) {
-      const tag = ({ bold: 'strong', italic: 'em', strike: 's', code: 'code', link: 'a' })[mark.type];
-      const wrapper = document.createElement(tag);
-      if (mark.type === 'link') wrapper.setAttribute('href', mark.attrs.href);
-      wrapper.append(element); element = wrapper;
-    }
-    fragment.append(element);
-  }
-  return fragment;
+const surface = ref<HTMLElement>(), issue = ref(''), link = ref(''), ready = ref(false), change = ref(0), linkId = useId();
+let editor: Editor | undefined, lastEmitted = '', destroyed = false;
+function rejected() { issue.value = '这次修改超出现有内容格式或长度限制，原文已保留。'; }
+function publish() {
+  if (!editor || editor.isDestroyed || editor.view.composing) return;
+  try { const value = fromEditorDocument(editor.getJSON()); lastEmitted = JSON.stringify(value); issue.value = ''; emit('update:modelValue', value); change.value++; }
+  catch { rejected(); }
 }
-function blockNode(node: RichTextDocument['content'][number]): HTMLElement {
-  if (node.type === 'paragraph' || node.type === 'heading') {
-    const element = document.createElement(node.type === 'paragraph' ? 'p' : `h${node.attrs.level}`);
-    element.append(inlineNodes(node.content)); if (!node.content.length) element.append(document.createElement('br')); return element;
-  }
-  const list = document.createElement(node.type === 'orderedList' ? 'ol' : 'ul');
-  if (node.type === 'orderedList' && node.attrs?.start) list.setAttribute('start', String(node.attrs.start));
-  for (const item of node.content) { const li = document.createElement('li'); item.content.forEach(child => li.append(blockNode(child))); list.append(li); }
-  return list;
+function load(value: RichTextDocument) {
+  if (!surface.value) return;
+  try {
+    const content = toEditorDocument(value);
+    editor?.destroy();
+    editor = new Editor({ element: surface.value, content, extensions: [...compatibleExtensions(), Extension.create({ name: 'contractGuard', addProseMirrorPlugins() { return [new Plugin({ filterTransaction(transaction) { if (!transaction.docChanged) return true; try { fromEditorDocument(transaction.doc.toJSON()); return true; } catch { rejected(); return false; } } })]; } })],
+      enableInputRules: false, enablePasteRules: false,
+      editorProps: { attributes: { role: 'textbox', 'aria-label': props.label || '正文富文本', 'aria-multiline': 'true', spellcheck: 'false' },
+        handlePaste(view, event) {
+          event.preventDefault(); const text = event.clipboardData?.getData('text/plain') || ''; if (!text) return true;
+          try { const paragraphs = plainTextParagraphs(text); RichTextDocumentSchema.parse({ type: 'doc', content: paragraphs }); const nodes = paragraphs.map(node => view.state.schema.nodeFromJSON(node)); view.dispatch(closeHistory(view.state.tr.replaceSelection(new Slice(Fragment.from(nodes), 1, 1))).setMeta('uiEvent', 'paste').scrollIntoView()); view.dispatch(closeHistory(view.state.tr)); }
+          catch { rejected(); } return true;
+        },
+        handleDOMEvents: { compositionend() { queueMicrotask(() => { if (!destroyed) publish(); }); return false; } },
+      },
+      onUpdate: publish, onSelectionUpdate: () => { change.value++; },
+    });
+    lastEmitted = JSON.stringify(value); ready.value = true; issue.value = ''; change.value++;
+  } catch { issue.value = '这份正文无法安全载入编辑器，原始内容已保留。请先导出草稿，再检查内容格式。'; ready.value = false; }
 }
-function render() {
-  if (!editor.value) return;
-  const value = JSON.stringify(props.modelValue);
-  if (value === lastValue) return;
-  lastValue = value;
-  editor.value.replaceChildren(...props.modelValue.content.map(blockNode));
-  if (!editor.value.childNodes.length) editor.value.append(blockNode({ type: 'paragraph', content: [] }));
-}
-function parseInline(nodes: NodeListOf<ChildNode> | ChildNode[], marks: RichTextMark[] = []): RichInline[] {
-  const out: RichInline[] = [];
-  for (const node of nodes) {
-    if (node.nodeType === Node.TEXT_NODE) { if (node.textContent) out.push({ type: 'text', text: node.textContent, ...(marks.length ? { marks } : {}) }); continue; }
-    if (!(node instanceof HTMLElement)) continue;
-    if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT'].includes(node.tagName)) continue;
-    if (node.tagName === 'BR') { out.push({ type: 'hardBreak' }); continue; }
-    const nextMarks = [...marks];
-    const type = ({ STRONG: 'bold', B: 'bold', EM: 'italic', I: 'italic', S: 'strike', STRIKE: 'strike', CODE: 'code' } as const)[node.tagName as 'STRONG'];
-    if (type && !nextMarks.some(mark => mark.type === type)) nextMarks.push({ type });
-    if (node.tagName === 'A') { const parsed = SafeHrefSchema.safeParse(node.getAttribute('href')); if (parsed.success && !nextMarks.some(mark => mark.type === 'link')) nextMarks.push({ type: 'link', attrs: { href: parsed.data } }); }
-    out.push(...parseInline(node.childNodes, nextMarks));
-  }
-  return out;
-}
-function parseBlocks(nodes: NodeListOf<ChildNode>): RichTextDocument['content'] {
-  const out: RichTextDocument['content'] = [];
-  let pending: ChildNode[] = [];
-  const flush = () => { if (pending.length) { const content = parseInline(pending); if (content.length) out.push({ type: 'paragraph', content }); pending = []; } };
-  for (const node of nodes) {
-    if (!(node instanceof HTMLElement)) { pending.push(node); continue; }
-    if (/^H[1-6]$/.test(node.tagName)) { flush(); out.push({ type: 'heading', attrs: { level: Number(node.tagName.slice(1)) }, content: parseInline(node.childNodes) }); }
-    else if (node.tagName === 'UL' || node.tagName === 'OL') {
-      flush(); const content = Array.from(node.children).filter(child => child.tagName === 'LI').map(li => ({ type: 'listItem' as const, content: parseBlocks(li.childNodes).filter((child): child is RichParagraph | RichList => child.type !== 'heading') }));
-      content.forEach(item => { if (!item.content.length) item.content.push({ type: 'paragraph', content: [] }); });
-      if (content.length) out.push(node.tagName === 'UL' ? { type: 'bulletList', content } : { type: 'orderedList', attrs: { start: Math.max(1, Number(node.getAttribute('start')) || 1) }, content });
-    } else if (['P', 'DIV'].includes(node.tagName)) { flush(); if (Array.from(node.children).some(child => ['P', 'DIV', 'UL', 'OL'].includes(child.tagName))) out.push(...parseBlocks(node.childNodes)); else out.push({ type: 'paragraph', content: parseInline(node.childNodes) }); }
-    else pending.push(node);
-  }
-  flush(); return out;
-}
-function update() {
-  if (!editor.value) return;
-  const value: RichTextDocument = { type: 'doc', content: parseBlocks(editor.value.childNodes) };
-  lastValue = JSON.stringify(value); emit('update:modelValue', value); remember();
-}
-function remember() {
-  const active = window.getSelection();
-  if (active?.rangeCount && editor.value?.contains(active.anchorNode)) selection = active.getRangeAt(0).cloneRange();
-}
-function restore() {
-  if (!editor.value) return null;
-  editor.value.focus();
-  if (!selection || !editor.value.contains(selection.commonAncestorContainer)) { selection = document.createRange(); selection.selectNodeContents(editor.value); selection.collapse(false); }
-  const active = window.getSelection(); active?.removeAllRanges(); active?.addRange(selection); return selection;
-}
-function mark(tag: string, href?: string) {
-  const range = restore(); if (!range || range.collapsed) { issue.value = '请先选中需要格式化的文字。'; return; }
-  const wrapper = document.createElement(tag); if (href) wrapper.setAttribute('href', href);
-  wrapper.append(range.extractContents()); range.insertNode(wrapper); range.selectNodeContents(wrapper); issue.value = ''; update();
-}
-function applyLink() { const parsed = SafeHrefSchema.safeParse(link.value); if (!parsed.success) { issue.value = '请输入有效的 https 链接或站内路径。'; return; } mark('a', parsed.data); link.value = ''; }
-function format(tag: string) {
-  const range = restore(); if (!range || !editor.value) return;
-  let node: HTMLElement | null = range.startContainer instanceof HTMLElement ? range.startContainer : range.startContainer.parentElement;
-  while (node && node.parentElement !== editor.value) node = node.parentElement;
-  if (!node || node === editor.value) return;
-  const replacement = document.createElement(tag);
-  if (tag === 'ul' || tag === 'ol') { const li = document.createElement('li'); const p = document.createElement('p'); p.append(...Array.from(node.childNodes)); li.append(p); replacement.append(li); }
-  else replacement.append(...Array.from(node.childNodes));
-  node.replaceWith(replacement); selection = document.createRange(); selection.selectNodeContents(replacement); selection.collapse(false); restore(); update();
-}
-function paste(event: ClipboardEvent) {
-  event.preventDefault(); const value = event.clipboardData?.getData('text/plain') ?? ''; const range = restore(); if (!range) return;
-  if (!value) return;
-  const paragraphs = plainTextParagraphs(value);
-  range.deleteContents();
-  let block = range.startContainer instanceof HTMLElement ? range.startContainer : range.startContainer.parentElement;
-  while (block && block !== editor.value && !/^(P|H[1-6])$/.test(block.tagName)) block = block.parentElement;
-  if (paragraphs.length > 1 && block && block !== editor.value) {
-    // Split the current paragraph (also inside a list item), retaining both
-    // surrounding text and its marks. Later pasted paragraphs are siblings.
-    const tail = document.createRange(); tail.selectNodeContents(block); tail.setStart(range.startContainer, range.startOffset);
-    const trailing = tail.extractContents();
-    range.insertNode(inlineNodes(paragraphs[0]!.content));
-    let last = block;
-    for (const paragraph of paragraphs.slice(1)) { const next = blockNode(paragraph); last.after(next); last = next; }
-    const caret = document.createTextNode(''); last.append(caret, trailing);
-    range.setStartBefore(caret);
-  } else {
-    const fragment = paragraphs.length === 1 ? inlineNodes(paragraphs[0]!.content) : document.createDocumentFragment();
-    if (paragraphs.length > 1) fragment.append(...paragraphs.map(blockNode));
-    const caret = document.createTextNode(''); fragment.append(caret); range.insertNode(fragment); range.setStartBefore(caret);
-  }
-  range.collapse(true); update();
-}
-onMounted(render); watch(() => props.modelValue, render, { deep: true });
+function command(action: (value: Editor) => void) { if (!editor || editor.view.composing || !ready.value) return; action(editor); change.value++; }
+function active(type: string, attributes?: Record<string, unknown>) { void change.value; return editor?.isActive(type, attributes) || false; }
+function applyLink() { const parsed = SafeHrefSchema.safeParse(link.value); if (!parsed.success) { issue.value = '请输入 HTTPS 地址、站内路径或标题锚点。'; return; } if (!editor || editor.state.selection.empty) { issue.value = '请先选中需要链接的文字。'; return; } command(value => { value.chain().focus().setMark('link', { href: parsed.data }).run(); }); link.value = ''; }
+watch(() => props.modelValue, value => { if (JSON.stringify(value) !== lastEmitted) load(value); }, { deep: true });
+onMounted(() => load(props.modelValue)); onBeforeUnmount(() => { destroyed = true; editor?.destroy(); });
 </script>
-<template><div class="rich-editor"><div class="rich-toolbar" @mousedown.prevent><button type="button" aria-label="加粗选中文字" @click="mark('strong')"><strong>B</strong></button><button type="button" aria-label="斜体选中文字" @click="mark('em')"><em>I</em></button><button type="button" aria-label="行内代码" @click="mark('code')">代码</button><button type="button" @click="format('p')">正文</button><button type="button" @click="format('h2')">二级标题</button><button type="button" @click="format('h3')">三级标题</button><button type="button" @click="format('ul')">无序列表</button><button type="button" @click="format('ol')">有序列表</button></div><div ref="editor" class="rich-surface" role="textbox" :aria-label="label ?? '正文富文本'" aria-multiline="true" contenteditable="true" @input="update" @mouseup="remember" @keyup="remember" @paste="paste" @click="remember"></div><div class="link-row"><label class="sr-only" :for="linkId">链接地址</label><input :id="linkId" v-model="link" placeholder="选中文字后输入链接地址" aria-label="链接地址"><button type="button" @click="applyLink">添加链接</button></div><p v-if="issue" role="status" class="hint">{{ issue }}</p></div></template>
+<template><div class="rich-editor"><div class="rich-toolbar" aria-label="文字格式" @mousedown.prevent>
+  <button type="button" :disabled="!ready" :aria-pressed="active('bold')" aria-label="加粗选中文字" @click="command(e => { e.chain().focus().toggleBold().run() })"><strong>B</strong></button>
+  <button type="button" :disabled="!ready" :aria-pressed="active('italic')" aria-label="斜体选中文字" @click="command(e => { e.chain().focus().toggleItalic().run() })"><em>I</em></button>
+  <button type="button" :disabled="!ready" :aria-pressed="active('strike')" @click="command(e => { e.chain().focus().toggleStrike().run() })">删除线</button>
+  <button type="button" :disabled="!ready" :aria-pressed="active('code')" @click="command(e => { e.chain().focus().toggleMark('code').run() })">代码</button>
+  <button type="button" :disabled="!ready" @click="command(e => { e.chain().focus().setParagraph().run() })">正文</button>
+  <button type="button" :disabled="!ready" :aria-pressed="active('heading', {level:2})" @click="command(e => { e.chain().focus().toggleHeading({level:2}).run() })">二级标题</button>
+  <button type="button" :disabled="!ready" :aria-pressed="active('heading', {level:3})" @click="command(e => { e.chain().focus().toggleHeading({level:3}).run() })">三级标题</button>
+  <button type="button" :disabled="!ready" :aria-pressed="active('bulletList')" @click="command(e => { e.chain().focus().toggleBulletList().run() })">无序列表</button>
+  <button type="button" :disabled="!ready" :aria-pressed="active('orderedList')" @click="command(e => { e.chain().focus().toggleOrderedList().run() })">有序列表</button>
+  <button type="button" :disabled="!ready" @click="command(e => { e.chain().focus().undo().run() })">撤销</button><button type="button" :disabled="!ready" @click="command(e => { e.chain().focus().redo().run() })">重做</button>
+</div><div ref="surface" class="rich-surface tiptap-surface"/><p v-if="!ready" class="hint">正文保持原样，其他资料仍可编辑。</p><div class="rich-link"><label :for="linkId" class="sr-only">链接地址</label><input :id="linkId" v-model="link" placeholder="https:// 或站内路径"><button type="button" :disabled="!ready" @mousedown.prevent @click="applyLink">插入链接</button><button type="button" :disabled="!ready" @mousedown.prevent @click="command(e => { e.chain().focus().unsetMark('link').run() })">移除链接</button></div><p v-if="issue" class="notice error mt8" role="alert">{{issue}}</p><p class="hint mt8">支持撤销与重做；粘贴为纯文本。列表内按 Tab 缩进，Shift + Tab 取消缩进。</p></div></template>
+<style scoped>.tiptap-surface{padding:0}.tiptap-surface :deep(.tiptap){min-height:180px;padding:16px;outline:none;white-space:pre-wrap;overflow-wrap:anywhere}.tiptap-surface :deep(.tiptap:focus){box-shadow:inset 0 0 0 2px var(--green);border-radius:4px}.rich-toolbar{flex-wrap:wrap}.rich-toolbar button[aria-pressed=true]{background:var(--green);color:white}.rich-link{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.rich-link input{flex:1;min-width:160px}.tiptap-surface :deep(ul),.tiptap-surface :deep(ol){padding-left:1.8em}</style>

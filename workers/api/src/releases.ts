@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { projectPublicTopics } from '@xvyin/contracts';
 import { HERO_TITLE, SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, PublishableAlbumSchema, PublishablePlaylistSchema, PublishableFitnessEntrySchema, PhotoMapSettingsSchema, PhotoCoordinatesSchema, PublicPhotoLocationSchema, IdSchema, Sha256Schema, PublicMediaAssetSchema, approximatePhotoCity, deriveFormats, fitnessDayCount, type SiteSettings, type FitnessSettingsDraft, type CreationDraft, type PublishableAlbum, type FitnessEntryDraft, type PlaylistDraft, type PublicMediaAsset, type PublicPhotoLocation } from '@xvyin/contracts';
 import type { Store } from './store/types';
 import type { DraftRecord } from './records';
@@ -211,7 +212,8 @@ export class Releases {
       if (collection === 'settings') {
         const schema = record.id === 'site' ? SiteSettingsSchema : FitnessSettingsDraftSchema;
         const publicSettings = record.id === 'site' ? snapshot.settings : snapshot.fitness.settings;
-        changeKind = !active ? 'new' : JSON.stringify(schema.parse(record.draft)) === JSON.stringify(schema.parse(publicSettings)) ? 'unchanged' : 'modified';
+        const projectedDraft = record.id === 'site' ? projectPublicTopics(SiteSettingsSchema.parse(record.draft), snapshot) : schema.parse(record.draft);
+        changeKind = !active ? 'new' : JSON.stringify(projectedDraft) === JSON.stringify(schema.parse(publicSettings)) ? 'unchanged' : 'modified';
       } else changeKind = published ? record.draftRevisionId === published.revisionId ? 'unchanged' : 'modified' : record.lastPublishedRevisionId || record.visibility === 'hidden' || explicitlyHidden.has(record.id) ? 'hidden' : 'new';
       return {
         collection, id: record.id, title: collection === 'settings' ? record.id === 'site' ? '网站设置' : '健身设置' : typeof draft.title === 'string' && draft.title ? draft.title : typeof draft.name === 'string' && draft.name ? draft.name : '未命名草稿',
@@ -251,6 +253,7 @@ export class Releases {
     assert(/^[a-f0-9]{40}$/u.test(this.codeSha), 'BUILD_NOT_CONFIGURED', 503, '发布代码版本尚未配置');
     assert(new Set(changes.map(change => `${change.collection}/${change.id}`)).size === changes.length, 'DUPLICATE_CHANGE', 422, '同一内容不能重复出现在发布清单');
     const snapshot = active ? await this.snapshot(active.value.releaseId) : emptySnapshot(id); snapshot.releaseId = id;
+    const previousTopics = snapshot.settings.topics || [];
     const pendingPhotoLocations: PendingPhotoLocation[] = [];
     const selectedRevisionIds: Record<string, string> = {};
     const selected = rebuildPublished ? [] : await this.store.getMany<DraftRecord>(changes.map(change => `${change.collection}/${change.id}`));
@@ -279,9 +282,16 @@ export class Releases {
         if (change.action === 'publish') snapshot.playlists.push({ ...publicationDraft(PublishablePlaylistSchema, record, change.collection), ...common });
       }
     }
+    if (!rebuildPublished) {
+      snapshot.settings = projectPublicTopics(snapshot.settings, snapshot);
+      for (const topic of snapshot.settings.topics || []) {
+        const previous = previousTopics.find(item => item.id === topic.id);
+        if (previous && previous.slug !== topic.slug) snapshot.routeAliases[`/topics/${previous.slug}`] = `/topics/${topic.slug}`;
+      }
+    }
     for (const entries of [snapshot.creations, snapshot.albums]) assert(new Set(entries.map(item => item.slug)).size === entries.length, 'SLUG_CONFLICT', 409, '公开地址重复，请修改 slug');
     assert(snapshot.playlists.filter(p => p.enabled && p.isDefault).length <= 1, 'DEFAULT_PLAYLIST_CONFLICT', 422, '只能有一个启用的默认歌单');
-    const routes = new Set([...snapshot.creations.map(v => `/creations/${v.slug}`), ...snapshot.albums.map(v => `/photography/${v.slug}`)]);
+    const routes = new Set([...snapshot.creations.map(v => `/creations/${v.slug}`), ...snapshot.albums.map(v => `/photography/${v.slug}`), ...(snapshot.settings.topics || []).map(topic => `/topics/${topic.slug}`)]);
     if (!rebuildPublished) snapshot.routeAliases = Object.fromEntries(Object.entries(snapshot.routeAliases).filter(([from, to]) => !routes.has(from) && routes.has(to)));
     // A rebuild refreshes only the media projection of the immutable public
     // snapshot, preserving its asset order/membership and every content revision.
@@ -421,6 +431,7 @@ export class Releases {
     }
     const snapshot = await this.snapshot(id), required = ['/', '/about/', '/creations/', '/photography/', '/fitness/', '/guestbook/', '/contact/', ...snapshot.creations.map(v => `/creations/${v.slug}/`), ...snapshot.albums.map(v => `/photography/${v.slug}/`)];
     const paths = new Set(files.map(file => file.path));
+    if (snapshot.settings.topics?.length) required.push('/topics/', ...snapshot.settings.topics.map(topic => `/topics/${topic.slug}/`));
     for (const route of required) assert(paths.has(`${route}index.html`), 'BUILD_ROUTE_MISSING', 422, `构建缺少公开页面：${route}`);
     const progressKey = `releases/${id}/manifest-preparation.json`, current = await this.bucket.get(progressKey);
     assert(!current || current.size <= 4 * 1024 * 1024, 'RELEASE_INVALID', 503, '清单准备进度大小无效');

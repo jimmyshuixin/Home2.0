@@ -3,12 +3,14 @@
 import PhotoSwipe from 'photoswipe'
 import 'photoswipe/style.css'
 import { displayDate, type Photo } from '~/lib/site'
-import { photoLightboxMotion, type PhotoSlide } from '~/lib/photo-lightbox'
+import { photoLightboxMotion, photoViewerTarget, type PhotoContext, type PhotoSlide } from '~/lib/photo-lightbox'
 
-const props = defineProps<{ photos: Photo[]; slides: PhotoSlide[]; index: number; trigger: HTMLElement; albumId?: string }>()
+const props = defineProps<{ photos: Photo[]; slides: PhotoSlide[]; index: number; trigger: HTMLElement; albumId?: string; photoContexts?: Record<string, PhotoContext> }>()
 const emit = defineEmits<{ close: [] }>()
 const current = ref(props.index), captionHost = shallowRef<HTMLElement>(), imageFailed = ref(false)
 const photo = computed(() => props.photos[props.slides[current.value]?.photoIndex ?? -1])
+const context = computed(() => photo.value && props.photoContexts?.[photo.value.id || photo.value.assetId])
+const target = computed(() => photoViewerTarget(photo.value, props.albumId, props.photoContexts))
 const captionId = useId()
 let viewer: PhotoSwipe | undefined, disposed = false, previousOverflow = ''
 let motion: MediaQueryList | undefined
@@ -22,9 +24,7 @@ function restorePage() {
 }
 
 function announcePhoto() {
-  if (props.albumId && photo.value?.id) window.dispatchEvent(new CustomEvent('xvyin-photo-view', {
-    detail: { type: 'photo', id: photo.value.id, parentId: props.albumId },
-  }))
+  if (props.albumId || props.photoContexts) window.dispatchEvent(new CustomEvent('xvyin-photo-view', { detail: target.value }))
 }
 function applyMotion() { if (viewer && motion) Object.assign(viewer.options, photoLightboxMotion(motion.matches)) }
 function retry() { imageFailed.value = false; viewer?.refreshSlideContent(current.value) }
@@ -83,7 +83,7 @@ onMounted(() => {
   instance.on('destroy', () => {
     restorePage()
     motion?.removeEventListener('change', applyMotion)
-    if (props.albumId) window.dispatchEvent(new CustomEvent('xvyin-photo-view'))
+    if (props.albumId || props.photoContexts) window.dispatchEvent(new CustomEvent('xvyin-photo-view'))
     viewer = undefined
     if (!disposed) {
       if (props.trigger.isConnected) props.trigger.focus({ preventScroll: true })
@@ -110,7 +110,8 @@ onBeforeUnmount(() => {
       <time v-if="photo.photoDate" :datetime="photo.photoDate">{{ displayDate(photo.photoDate) }}</time>
       <PhotoMetadata :key="photo.assetId" :asset-id="photo.assetId" :hide-date="Boolean(photo.photoDate)" expanded />
       <div class="photo-viewer-actions">
-        <LikeButton v-if="albumId && photo.id" :key="`${albumId}/${photo.id}`" :target="{type: 'photo', id: photo.id, parentId: albumId}" :label="photo.alt" />
+        <LikeButton v-if="target" :key="`${target.parentId}/${target.id}`" :target="target" :label="photo.alt" />
+        <NuxtLink v-if="context" :to="`/photography/${encodeURIComponent(context.albumSlug)}`">走进「{{ context.albumTitle }}」</NuxtLink>
         <button v-if="imageFailed" type="button" @click="retry">重新加载照片</button>
       </div>
     </div>

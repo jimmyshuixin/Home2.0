@@ -1,5 +1,5 @@
 export const SEARCH_CATEGORIES = {
-  creation: '创作', photography: '摄影', about: '关于', fitness: '健身',
+  creation: '创作', photography: '摄影', about: '关于', fitness: '健身', topic: '专题',
 } as const
 export type SearchCategory = keyof typeof SEARCH_CATEGORIES
 export const SEARCH_PAGE_SIZE = 8
@@ -12,7 +12,7 @@ export function searchBundlePath(releaseId: string): string {
 
 export function searchResultPath(value: unknown): string | null {
   if (typeof value !== 'string' || value.length > 160) return null
-  if (!/^\/(?:about|fitness|(?:creations|photography)\/[a-z0-9]+(?:-[a-z0-9]+)*)\/?$/u.test(value)) return null
+  if (!/^\/(?:about|fitness|(?:creations|photography|topics)\/[a-z0-9]+(?:-[a-z0-9]+)*)\/?$/u.test(value)) return null
   return value.replace(/\/$/u, '')
 }
 

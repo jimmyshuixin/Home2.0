@@ -73,6 +73,10 @@ export function searchRecords(input: unknown): { releaseId: string; records: Sea
     add(`/photography/${album.slug}`, album.title,
       words([album.description, ...album.photos.map(photo => words([photo.alt, photo.caption]))]), 'photography', album.publishedAt);
   }
+  for (const topic of snapshot.settings.topics || []) {
+    add(`/topics/${topic.slug}`, topic.title, words([topic.intro, ...topic.members.map(member =>
+      (member.collection === 'creations' ? snapshot.creations : snapshot.albums).find(item => item.id === member.id)!.title)]), 'topic');
+  }
   if (snapshot.fitness.settings.intro || snapshot.fitness.entries.length) {
     add('/fitness', '健身 · 日常记录', words([snapshot.fitness.settings.intro,
       ...snapshot.fitness.entries.map(entry => words([entry.title, entry.caption, entry.tags.join(' '), entry.entryDate,
