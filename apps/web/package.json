@@ -6,9 +6,16 @@
   "scripts": {
     "dev": "nuxt dev --host 127.0.0.1",
     "build": "nuxt build",
-    "generate": "nuxt generate",
+    "generate": "nuxt generate && tsx ../../scripts/v3/search-index-cli.ts",
     "preview": "nuxt preview",
     "typecheck": "nuxt typecheck"
   },
-  "dependencies": { "@xvyin/contracts": "0.1.0", "nuxt": "4.5.2", "vue": "3.5.40", "vue-router": "5.2.0", "zod": "4.6.2" }
+  "dependencies": {
+    "@xvyin/contracts": "0.1.0",
+    "nuxt": "4.5.2",
+    "photoswipe": "5.4.4",
+    "vue": "3.5.40",
+    "vue-router": "5.2.0",
+    "zod": "4.6.2"
+  }
 }

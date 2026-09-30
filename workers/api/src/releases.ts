@@ -132,7 +132,7 @@ function applyPhotoLocations(snapshot: Snapshot, locations: Record<string, Publi
 export const BuildManifestInputSchema = z.object({ files: z.array(z.object({
   path: z.string().regex(/^\/[A-Za-z0-9_\-./%]+$/u).max(500).refine(v => !v.includes('..') && !v.includes('//') && !/%(?:2f|5c|2e|00)/iu.test(v)),
   sha256: Sha256Schema, bytes: z.number().int().positive().max(25 * 1024 * 1024),
-  contentType: z.enum(['text/html; charset=utf-8', 'text/css; charset=utf-8', 'application/javascript; charset=utf-8', 'application/json; charset=utf-8', 'text/plain; charset=utf-8', 'application/xml; charset=utf-8', 'image/png', 'image/jpeg', 'image/webp', 'image/svg+xml', 'image/x-icon', 'font/woff', 'font/woff2', 'font/ttf', 'audio/mpeg', 'application/octet-stream']),
+  contentType: z.enum(['text/html; charset=utf-8', 'text/css; charset=utf-8', 'application/javascript; charset=utf-8', 'application/json; charset=utf-8', 'text/plain; charset=utf-8', 'application/xml; charset=utf-8', 'application/rss+xml; charset=utf-8', 'application/feed+json; charset=utf-8', 'application/wasm', 'image/png', 'image/jpeg', 'image/webp', 'image/svg+xml', 'image/x-icon', 'font/woff', 'font/woff2', 'font/ttf', 'audio/mpeg', 'application/octet-stream']),
 }).strict()).min(1).max(5000) }).strict();
 export function emptySnapshot(releaseId: string): Snapshot {
   return { schemaVersion: 1, releaseId, settings: SiteSettingsSchema.parse({}), creations: [], albums: [], fitness: { settings: FitnessSettingsDraftSchema.parse({}), entries: [] }, playlists: [], assets: [], routeAliases: {} };

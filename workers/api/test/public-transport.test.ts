@@ -45,6 +45,8 @@ it('allows the official video players and exact Bilibili mobile destination in H
       const csp = result.headers.get('content-security-policy')!;
       expect(csp.split(';').map(value => value.trim()).find(value => value.startsWith('frame-src '))).toBe("frame-src 'self' https://player.bilibili.com https://www.bilibili.com/blackboard/webplayer/mbplayer.html https://www.youtube-nocookie.com https://open.douyin.com");
       expect(csp).toContain("connect-src 'self'");
+      expect(csp).toContain("'wasm-unsafe-eval'");
+      expect(csp).not.toContain("'unsafe-eval'");
       expect(csp).toContain("object-src 'none'");
       expect(result.headers.get('x-frame-options')).toBe('DENY');
       await result.text();

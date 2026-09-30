@@ -32,7 +32,7 @@ function objectHeaders(object: ObjectMetadata, contentType: string, privateView:
   if (contentType.startsWith('text/html')) {
     // The official Bilibili embed navigates its own frame to this exact mobile
     // player on mobile user agents. Keep the rest of www.bilibili.com excluded.
-    headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob: https:; font-src 'self'; connect-src 'self'; frame-src 'self' https://player.bilibili.com https://www.bilibili.com/blackboard/webplayer/mbplayer.html https://www.youtube-nocookie.com https://open.douyin.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+    headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob: https:; font-src 'self'; connect-src 'self'; frame-src 'self' https://player.bilibili.com https://www.bilibili.com/blackboard/webplayer/mbplayer.html https://www.youtube-nocookie.com https://open.douyin.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
     headers.set('x-frame-options', 'DENY');
   }
   return headers;

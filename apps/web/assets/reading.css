@@ -29,6 +29,11 @@
 .reading-page pre{max-width:100%;overscroll-behavior-x:contain}
 .reading-page .attachment{align-items:flex-start;gap:16px;min-width:0}.reading-page .attachment>div{min-width:0;overflow-wrap:anywhere}.reading-page .attachment>.icon{margin-top:8px}
 .reading-page .toc{border-left:0;padding:0 0 0 18px;font-size:13px;top:40px;max-height:calc(100svh - 80px);overflow-y:auto}.reading-page .toc h2{font-size:12px;letter-spacing:.1em;color:var(--muted);font-weight:400}.reading-page .toc a{font-size:13px;min-height:44px;padding-block:10px;overflow-wrap:anywhere;line-height:1.7}
+.reading-page .richtext :is(h2,h3,h4,h5,h6)[id]{scroll-margin-top:32px}
+.reading-page :is(.toc,.mobile-toc) a[data-level="3"]{padding-inline-start:10px}
+.reading-page :is(.toc,.mobile-toc) a[data-level="4"]{padding-inline-start:20px}
+.reading-page :is(.toc,.mobile-toc) a[data-level="5"]{padding-inline-start:30px}
+.reading-page :is(.toc,.mobile-toc) a[data-level="6"]{padding-inline-start:40px}
 .reading-page .reading-body>.comments{margin-top:clamp(56px,7vw,88px)}
 .reading-page .reading-body>.related{margin-top:clamp(48px,6vw,72px)}
 .reading-page .comments h2,.reading-page .related h2{font-size:clamp(25px,3vw,30px);font-weight:400}

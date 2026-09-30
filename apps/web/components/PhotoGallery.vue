@@ -1,20 +1,37 @@
 <script setup lang="ts">
 import { assetVariant, assetSrcSet, displayDate, ordered, type Photo } from '~/lib/site'
+import type { Component } from 'vue'
+import { photoLightboxSlides, photoViewerArbiter, type PhotoSlide, type PhotoViewerLease } from '~/lib/photo-lightbox'
 const props = withDefaults(defineProps<{ photos: Photo[]; layout?: string; albumId?: string }>(), { layout: 'grid' })
-const pictures = computed(() => ordered(props.photos)), open = ref(false), active = ref(0)
+const pictures = computed(() => ordered(props.photos))
 const continuous = computed(() => ['continuous', 'stack'].includes(props.layout) || pictures.value.length === 1)
 function portrait(item: Photo) { const variant = assetVariant(item.assetId); return Boolean(variant?.width && variant?.height && variant.height > variant.width * 1.1) }
 const imageSizes = computed(() => continuous.value ? '(max-width: 600px) calc(100vw - 40px), (max-width: 1000px) calc(100vw - 80px), 960px' : '(max-width: 600px) calc(100vw - 40px), (max-width: 1000px) calc((100vw - 80px) / 2), 560px')
-const photo = computed(() => pictures.value[active.value])
-const large = computed(() => assetVariant(photo.value?.assetId, 'large'))
 const failed = ref<Record<string, boolean>>({})
-function show(i: number) { active.value = i; open.value = true }
-function navigate(delta: number) { active.value = (active.value + delta + pictures.value.length) % pictures.value.length }
-function keyboard(event: KeyboardEvent) { if (!open.value) return; if (event.key === 'ArrowLeft') navigate(-1); if (event.key === 'ArrowRight') navigate(1) }
-function announcePhoto() { if (props.albumId && photo.value?.id) window.dispatchEvent(new CustomEvent('xvyin-photo-view', { detail: { type: 'photo', id: photo.value.id, parentId: props.albumId } })) }
-watch([open, active], ([isOpen]) => { if (isOpen) announcePhoto(); else if (props.albumId) window.dispatchEvent(new CustomEvent('xvyin-photo-view')) })
-onMounted(() => window.addEventListener('keydown', keyboard))
-onBeforeUnmount(() => window.removeEventListener('keydown', keyboard))
+const lightbox = shallowRef<Component>(), opening = ref(false), openError = ref('')
+const request = shallowRef<{ photos: Photo[]; slides: PhotoSlide[]; index: number; trigger: HTMLElement }>()
+let viewerLease: PhotoViewerLease | undefined
+function closeViewer() { request.value = undefined; opening.value = false; viewerLease?.release(); viewerLease = undefined }
+async function show(photoIndex: number, event: MouseEvent) {
+  const lease = photoViewerArbiter().request(() => { if (viewerLease === lease) closeViewer() })
+  if (!lease) return
+  viewerLease = lease
+  const trigger = event.currentTarget as HTMLElement, photos = pictures.value
+  const slides = photoLightboxSlides(photos, id => assetVariant(id, 'large'), assetSrcSet)
+  const index = slides.findIndex(slide => slide.photoIndex === photoIndex)
+  openError.value = ''
+  if (index < 0) { openError.value = '这张照片的尺寸暂不可用，请稍后再试。'; closeViewer(); return }
+  opening.value = true
+  try {
+    const component = lightbox.value || (await import('./PhotoLightbox.vue')).default
+    if (!lease.markOpen()) return
+    lightbox.value = component
+    request.value = { photos, slides, index, trigger }
+  } catch {
+    if (lease.isCurrent()) { openError.value = '照片查看器暂时无法加载，请刷新页面后重试。'; closeViewer() }
+  } finally { if (lease.isCurrent()) opening.value = false }
+}
+onBeforeUnmount(closeViewer)
 </script>
 
 <style scoped>
@@ -22,4 +39,4 @@ onBeforeUnmount(() => window.removeEventListener('keydown', keyboard))
 @media(hover:none){.gallery-frame .expand-icon{opacity:.8}}
 @media(max-width:600px){.gallery-frame:not(.photo-gallery-continuous){grid-template-columns:minmax(0,1fr)}.gallery-frame.gallery-columns{columns:1}.gallery-frame img{max-height:78svh}.gallery-frame figcaption{font-size:13px;margin-top:10px}.gallery-frame.photo-gallery-continuous .portrait-photo{width:min(100%,440px)}}
 </style>
-<template><div :class="['photo-gallery', 'gallery-frame', { 'photo-gallery-continuous': continuous, 'gallery-columns': layout === 'columns' }]"><figure v-for="(item, i) in pictures" :key="item.id || `${item.assetId}/${i}`" :class="{ 'portrait-photo': portrait(item) }"><button v-if="assetVariant(item.assetId) && !failed[item.assetId]" class="photo-button" :aria-label="`放大查看${item.title || item.alt || '照片'}`" @click="show(i)"><img :src="assetVariant(item.assetId)?.url" :srcset="assetSrcSet(item.assetId)" :sizes="portrait(item) ? '(max-width: 600px) calc(100vw - 40px), 440px' : imageSizes" :width="assetVariant(item.assetId)?.width" :height="assetVariant(item.assetId)?.height" :alt="item.alt" loading="lazy" decoding="async" @error="failed[item.assetId] = true"><span class="expand-icon"><SiteIcon name="expand" /></span></button><div v-else class="media-unavailable"><p>照片暂时无法显示。</p><button v-if="failed[item.assetId]" @click="failed[item.assetId] = false">重新加载</button></div><figcaption v-if="item.title || item.caption || item.photoDate"><strong v-if="item.title">{{ item.title }}</strong><span v-if="item.caption">{{ item.caption }}</span><time v-if="item.photoDate" :datetime="item.photoDate">{{ displayDate(item.photoDate) }}</time></figcaption><PhotoMetadata :asset-id="item.assetId" :hide-date="Boolean(item.photoDate)" /><div v-if="albumId && item.id" class="photo-appreciation"><LikeButton :load-count="false" :target="{type: 'photo', id: item.id, parentId: albumId}" :label="item.alt" /></div></figure></div><AppDialog v-model="open" :title="photo?.title || '查看照片'" wide><div v-if="photo" class="lightbox-body"><img v-if="large && open" :src="large.url" :alt="photo.alt" :width="large.width" :height="large.height"><p v-else-if="open">照片暂时无法显示。</p><div class="lightbox-caption"><p v-if="photo.caption">{{ photo.caption }}</p><time v-if="photo.photoDate" :datetime="photo.photoDate">{{ displayDate(photo.photoDate) }}</time><PhotoMetadata :asset-id="photo.assetId" :hide-date="Boolean(photo.photoDate)" expanded /><div v-if="albumId && photo.id" class="photo-appreciation"><LikeButton :target="{type: 'photo', id: photo.id, parentId: albumId}" :label="photo.alt" /></div></div></div><div v-if="pictures.length > 1" class="lightbox-nav"><button aria-label="上一张照片" @click="navigate(-1)"><SiteIcon name="back" />上一张</button><span>{{ active + 1 }} / {{ pictures.length }}</span><button aria-label="下一张照片" @click="navigate(1)">下一张<SiteIcon name="arrow" /></button></div></AppDialog></template>
+<template><div :class="['photo-gallery', 'gallery-frame', { 'photo-gallery-continuous': continuous, 'gallery-columns': layout === 'columns' }]"><figure v-for="(item, i) in pictures" :key="item.id || `${item.assetId}/${i}`" :class="{ 'portrait-photo': portrait(item) }"><button v-if="assetVariant(item.assetId) && !failed[item.assetId]" class="photo-button" :aria-label="`放大查看${item.title || item.alt || '照片'}`" :aria-busy="opening || undefined" @click="show(i, $event)"><img :src="assetVariant(item.assetId)?.url" :srcset="assetSrcSet(item.assetId)" :sizes="portrait(item) ? '(max-width: 600px) calc(100vw - 40px), 440px' : imageSizes" :width="assetVariant(item.assetId)?.width" :height="assetVariant(item.assetId)?.height" :alt="item.alt" loading="lazy" decoding="async" @error="failed[item.assetId] = true"><span class="expand-icon"><SiteIcon name="expand" /></span></button><div v-else class="media-unavailable"><p>照片暂时无法显示。</p><button v-if="failed[item.assetId]" @click="failed[item.assetId] = false">重新加载</button></div><figcaption v-if="item.title || item.caption || item.photoDate"><strong v-if="item.title">{{ item.title }}</strong><span v-if="item.caption">{{ item.caption }}</span><time v-if="item.photoDate" :datetime="item.photoDate">{{ displayDate(item.photoDate) }}</time></figcaption><PhotoMetadata :asset-id="item.assetId" :hide-date="Boolean(item.photoDate)" /><div v-if="albumId && item.id" class="photo-appreciation"><LikeButton :load-count="false" :target="{type: 'photo', id: item.id, parentId: albumId}" :label="item.alt" /></div></figure></div><p v-if="opening" role="status">正在打开照片… <button type="button" @click="closeViewer">取消</button></p><p v-if="openError" role="alert">{{ openError }}</p><component :is="lightbox" v-if="lightbox && request" v-bind="request" :album-id="albumId" @close="closeViewer" /></template>

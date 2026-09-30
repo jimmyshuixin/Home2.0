@@ -206,6 +206,16 @@ async function preview(job: ReleaseJob, containsTitle: boolean) {
   expect(asset.headers.get('cache-control')).toBe('private, no-store');
   expect((await request('/creations/', { authenticated: false, cookie: previewCookie })).status).toBe(401);
   expect((await request(assetPath!, { authenticated: false, cookie: previewCookie })).status).toBe(401);
+  for (const path of ['/feed.json', '/feed.xml', `/search-index/${job.id}/pagefind.js`, `/search-index/${job.id}/xvyin-search.json`]) {
+    const privateFile = await request(path, { cookie });
+    expect(privateFile.status).toBe(200);
+    expect(privateFile.headers.get('cache-control')).toBe('private, no-store');
+    expect(privateFile.headers.get('x-xvyin-release')).toBe(job.id);
+    expect(privateFile.headers.get('x-robots-tag')).toContain('noindex');
+    if (path === '/feed.json') expect((await privateFile.text()).includes(title)).toBe(containsTitle);
+    else await privateFile.arrayBuffer();
+    expect((await request(path, { authenticated: false, cookie: previewCookie })).status).toBe(401);
+  }
   const closed = await request('/api/v1/admin/preview/close', { method: 'POST', body: {} });
   expect(closed.headers.get('set-cookie')).toContain('Max-Age=0');
 }
@@ -227,17 +237,28 @@ describe('actual Nuxt / SQLite / workerd R2 publication', () => {
     expect(detail.status).toBe(200); expect(detail.headers.get('x-xvyin-release')).toBe(first.id); expect(await detail.text()).toContain(title);
     const publicFirst = await request('/api/v1/creations', { authenticated: false });
     expect((await publicFirst.json() as { meta: { releaseId: string } }).meta.releaseId).toBe(first.id);
+    const feedFirst = await request('/feed.json', { authenticated: false });
+    expect(feedFirst.headers.get('content-type')).toBe('application/feed+json; charset=utf-8');
+    expect(await feedFirst.text()).toContain(title);
+    expect((await request(`/search-index/${first.id}/pagefind.js`, { authenticated: false })).status).toBe(200);
     const current = await body<DraftRecord>(await request(`/api/v1/admin/creations/${record.id}`));
     expect(current.visibility).toBe('published');
     const second = await buildCandidate(await candidate(current, 'hide', first.id));
+    expect((await request(`/search-index/${second.id}/pagefind.js`, { authenticated: false })).status).toBe(404);
     await preview(second, false);
     expect((await request(`/creations/${slug}/`, { authenticated: false })).status).toBe(200);
     expect((await body<ReleaseJob>(await request(`/api/v1/admin/releases/${second.id}/activate`, { method: 'POST', body: { expectedReleaseId: first.id } }))).status).toBe('live');
     expect((await request(`/creations/${slug}/`, { authenticated: false })).status).toBe(404);
+    expect(await (await request('/feed.json', { authenticated: false })).text()).not.toContain(title);
+    expect((await request(`/search-index/${first.id}/pagefind.js`, { authenticated: false })).status).toBe(404);
+    expect((await request(`/search-index/${second.id}/pagefind.js`, { authenticated: false })).status).toBe(200);
     const restored = await body<ReleaseJob>(await request(`/api/v1/admin/releases/${first.id}/activate`, { method: 'POST', body: { expectedReleaseId: second.id } }));
     expect(restored.status).toBe('live');
     const oldDetail = await request(`/creations/${slug}/`, { authenticated: false });
     expect(oldDetail.status).toBe(200); expect(oldDetail.headers.get('x-xvyin-release')).toBe(first.id); expect(await oldDetail.text()).toContain(title);
+    expect(await (await request('/feed.json', { authenticated: false })).text()).toContain(title);
+    expect((await request(`/search-index/${first.id}/pagefind.js`, { authenticated: false })).status).toBe(200);
+    expect((await request(`/search-index/${second.id}/pagefind.js`, { authenticated: false })).status).toBe(404);
     const restoredRecord = await body<DraftRecord>(await request(`/api/v1/admin/creations/${record.id}`));
     expect(restoredRecord.visibility).toBe('published');
     const failure = await candidate(restoredRecord, 'hide', first.id), runId = randomUUID(), client = runner(failure.id, runId);

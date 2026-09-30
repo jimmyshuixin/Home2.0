@@ -52,6 +52,7 @@
     "hono": "4.13.7",
     "jose": "6.2.12",
     "miniflare": "5.20260911.0-alpha",
+    "pagefind": "1.5.2",
     "pdf-lib": "1.17.1",
     "playwright-core": "^1.60.0",
     "sax": "1.6.1",
