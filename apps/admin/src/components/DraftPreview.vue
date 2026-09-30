@@ -4,6 +4,7 @@ import type { AlbumDraft, CreationDraft, FitnessEntryDraft, PlaylistDraft } from
 import type { Collection } from '../api';
 import { externalMediaLink } from '../media';
 import MediaPreview from './MediaPreview.vue';
+import DraftImageComparison from './DraftImageComparison.vue';
 import DraftRichText from './DraftRichText';
 const props = defineProps<{ collection: Collection; draft: CreationDraft | AlbumDraft | FitnessEntryDraft | PlaylistDraft }>();
 const emit = defineEmits<{ close: [] }>();
@@ -20,13 +21,14 @@ onBeforeUnmount(() => dialog.value?.close());
     <header class="dialog-head"><div><p class="eyebrow">DRAFT PREVIEW</p><h2 id="draft-preview-heading">预览当前编辑</h2></div><button type="button" @click="emit('close')">返回编辑</button></header>
     <div class="dialog-content">
       <p class="draft-note">包含当前尚未保存的编辑，仅供你查看。保存草稿后可到发布中心生成网站完整预览。</p>
-      <article class="draft-paper"><h1>{{ title || '未命名内容' }}</h1>
+      <article class="draft-paper"><p v-if="collection === 'creations' && creation.kind === 'note'" class="eyebrow">随记</p><h1 v-else>{{ title || '未命名内容' }}</h1>
         <template v-if="collection === 'creations'">
           <p v-if="creation.summary" class="summary">{{ creation.summary }}</p>
           <MediaPreview v-if="creation.coverAssetId" :asset-id="creation.coverAssetId" label="创作封面"/>
           <p v-if="!creation.blocks.length" class="hint">尚未添加正文内容。</p>
           <section v-for="block in creation.blocks" :key="block.id" class="draft-block">
             <DraftRichText v-if="block.type === 'richtext'" :document="block.document"/>
+            <DraftImageComparison v-else-if="block.type === 'compare'" :block="block"/>
             <figure v-else-if="block.type === 'image'"><MediaPreview :asset-id="block.assetId" :label="block.alt || '正文图片'"/><figcaption v-if="block.caption">{{ block.caption }}</figcaption></figure>
             <div v-else-if="block.type === 'gallery'" class="draft-gallery" :class="{ stack: block.layout === 'stack' }"><figure v-for="(photo, index) in block.items" :key="`${photo.assetId}/${index}`"><MediaPreview :asset-id="photo.assetId" :label="photo.alt || '图集图片'"/><figcaption v-if="photo.caption">{{ photo.caption }}</figcaption></figure></div>
             <template v-else-if="block.type === 'audio' || block.type === 'video'">

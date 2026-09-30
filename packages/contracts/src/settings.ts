@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { HttpsUrlSchema, IdSchema, plainText, requireUniqueIds, SlugSchema, SortOrderSchema, VersionSchema } from './common';
+import { HttpsUrlSchema, IdSchema, plainText, requireUniqueIds, SlugSchema, SortOrderSchema, UtcTimestampSchema, VersionSchema } from './common';
 import { RichTextDocumentSchema } from './content';
 import { HERO_TITLE } from './limits';
 
@@ -36,6 +36,12 @@ export const TopicSchema = z.object({
 });
 export type Topic = z.infer<typeof TopicSchema>;
 export type TopicMember = z.infer<typeof TopicMemberSchema>;
+export const NowSchema = z.object({
+  enabled: z.boolean().default(false),
+  text: plainText(2000).default(''),
+  updatedAt: UtcTimestampSchema.nullable().default(null),
+}).strict();
+export type Now = z.infer<typeof NowSchema>;
 const settingsShape = {
   siteTitle: plainText(80, 1).default('虚宁的个人网站'),
   // Read existing V3 records without rewriting immutable published snapshots.
@@ -52,6 +58,7 @@ const settingsShape = {
   footerText: plainText(500).default(''),
   // Optional preserves the serialized shape of existing immutable releases.
   topics: z.array(TopicSchema).max(TOPIC_LIMITS.topics).optional(),
+  now: NowSchema.optional(),
 };
 function validateSettings(value: { navigation: { href: string }[]; socialLinks: { id: string }[]; topics?: Topic[] }, ctx: z.RefinementCtx) {
   if (new Set(value.navigation.map(item => item.href)).size !== value.navigation.length) {
@@ -72,9 +79,17 @@ export type SiteSettingsInput = z.infer<typeof SiteSettingsInputSchema>;
 
 /** Project only against the selected immutable release, never mutable draft visibility. */
 export function projectPublicTopics(settings: SiteSettings, published: { creations: readonly { id: string }[]; albums: readonly { id: string }[] }): SiteSettings {
-  if (!settings.topics) return settings;
+  const publicSettings = projectPublicNow(settings);
+  if (!settings.topics) return publicSettings;
   const available = { creations: new Set(published.creations.map(item => item.id)), albums: new Set(published.albums.map(item => item.id)) };
-  return { ...settings, topics: settings.topics.filter(topic => topic.enabled).map(topic => ({
+  return { ...publicSettings, topics: settings.topics.filter(topic => topic.enabled).map(topic => ({
     ...topic, members: topic.members.filter(member => available[member.collection].has(member.id)),
   })).filter(topic => topic.members.length > 0) };
+}
+
+/** Disabled and empty Now drafts never cross the immutable public boundary. */
+export function projectPublicNow(settings: SiteSettings): SiteSettings {
+  if (!settings.now || (settings.now.enabled && settings.now.text.trim() && settings.now.updatedAt)) return settings;
+  const { now: _now, ...publicSettings } = settings;
+  return publicSettings;
 }

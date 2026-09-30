@@ -7,7 +7,7 @@ const music = useMusic()
   <footer class="site-footer">
     <div class="footer-main">
       <div class="footer-signature"><NuxtLink to="/" class="footer-brand" aria-label="虚宁，返回首页">虚宁</NuxtLink><p>{{ site.settings.copyright || '虚宁 · xvyin.com' }}</p></div>
-      <nav aria-label="页脚导航"><NuxtLink to="/about">关于</NuxtLink><NuxtLink to="/contact">联系</NuxtLink><NuxtLink to="/guestbook">留言</NuxtLink><NuxtLink to="/search">搜索</NuxtLink><NuxtLink v-if="site.settings.topics?.length" to="/topics">专题</NuxtLink><NuxtLink to="/subscribe">订阅</NuxtLink><a href="/admin/">管理</a></nav>
+      <nav aria-label="页脚导航"><NuxtLink to="/about">关于</NuxtLink><NuxtLink to="/contact">联系</NuxtLink><NuxtLink to="/guestbook">留言</NuxtLink><NuxtLink to="/notes">随记</NuxtLink><NuxtLink to="/now">近况</NuxtLink><NuxtLink to="/yearbook">年鉴</NuxtLink><NuxtLink to="/search">搜索</NuxtLink><NuxtLink v-if="site.settings.topics?.length" to="/topics">专题</NuxtLink><NuxtLink to="/subscribe">订阅</NuxtLink><a href="/admin/">管理</a></nav>
     </div>
     <div v-if="music.track.value?.title" class="footer-listening">
       <span class="listening-label">{{ music.pendingPlay.value ? '此刻在听' : '留一首歌' }}</span>

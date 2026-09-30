@@ -20,7 +20,7 @@ export function assetVariant(id?: string | null, role = 'content'): Variant | un
 }
 export function formats(entry: Creation): string[] {
   const types = entry.blocks.map((block) => block.type)
-  return [types.some((type) => ['richtext', 'image', 'gallery', 'quote', 'code', 'file'].includes(type)) ? 'text' : '', types.includes('audio') ? 'audio' : '', types.includes('video') ? 'video' : ''].filter(Boolean)
+  return [types.some((type) => ['richtext', 'image', 'compare', 'gallery', 'quote', 'code', 'file'].includes(type)) ? 'text' : '', types.includes('audio') ? 'audio' : '', types.includes('video') ? 'video' : ''].filter(Boolean)
 }
 export function formatLabel(entry: Creation): string { return formats(entry).map((type) => ({ text: '图文', audio: '音频', video: '视频' })[type]).join(' · ') }
 export function ordered<T extends { sortOrder?: number; id?: string }>(items: T[]): T[] { return [...items].sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || (a.id || '').localeCompare(b.id || '')) }

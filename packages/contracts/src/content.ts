@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { boundedTreeProblem, HttpsUrlSchema, IdSchema, jsonByteLength, plainText, requireUniqueIds, SafeHrefSchema, SlugSchema, SortOrderSchema, VersionSchema } from './common';
 import { CONTENT_LIMITS, SCHEMA_VERSION } from './limits';
+import type { PublicMediaAsset } from './media';
 
 export const RichTextMarkSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('bold') }).strict(),
@@ -67,6 +68,13 @@ export const GalleryBlockSchema = z.object({
   ...blockId, type: z.literal('gallery'), items: z.array(GalleryItemSchema).min(1).max(100),
   layout: z.enum(['grid', 'columns', 'stack']).default('grid'),
 }).strict();
+export const ComparisonImageSchema = z.object({
+  assetId: IdSchema, alt: plainText(500, 1), label: plainText(80, 1),
+}).strict();
+export const CompareBlockSchema = z.object({
+  ...blockId, type: z.literal('compare'), before: ComparisonImageSchema, after: ComparisonImageSchema,
+  mode: z.enum(['side-by-side', 'slider']).default('side-by-side'), caption: plainText(1000).optional(),
+}).strict();
 
 // Old drafts contain assetId: '' even when an external source was selected.
 // Normalize this sentinel at both boundaries so valid provider content publishes.
@@ -101,7 +109,7 @@ export const CodeBlockSchema = z.object({
   code: z.string().min(1).max(64_000), filename: plainText(200).optional(),
 }).strict();
 export const ContentBlockSchema = z.discriminatedUnion('type', [
-  RichTextBlockSchema, ImageBlockSchema, GalleryBlockSchema, AudioBlockSchema,
+  RichTextBlockSchema, ImageBlockSchema, GalleryBlockSchema, CompareBlockSchema, AudioBlockSchema,
   VideoBlockSchema, FileBlockSchema, QuoteBlockSchema, CodeBlockSchema,
 ]);
 export type ContentBlock = z.infer<typeof ContentBlockSchema>;
@@ -120,6 +128,10 @@ export const DraftContentBlockSchema = z.discriminatedUnion('type', [
   RichTextBlockSchema,
   ImageBlockSchema.extend({ assetId: DraftAssetIdSchema, alt: plainText(500).default('') }),
   GalleryBlockSchema.extend({ items: z.array(GalleryItemSchema.extend({ assetId: DraftAssetIdSchema, alt: plainText(500).default('') })).max(100).default([]) }),
+  CompareBlockSchema.extend({
+    before: ComparisonImageSchema.extend({ assetId: DraftAssetIdSchema, alt: plainText(500).default(''), label: plainText(80).default('') }).default({ assetId: '', alt: '', label: '' }),
+    after: ComparisonImageSchema.extend({ assetId: DraftAssetIdSchema, alt: plainText(500).default(''), label: plainText(80).default('') }).default({ assetId: '', alt: '', label: '' }),
+  }),
   z.object({ ...AudioBlockSchema.shape, ...draftMediaSource, title: plainText(120).default('') }).strict().superRefine(atMostOneMediaSource),
   z.object({ ...VideoBlockSchema.shape, ...draftMediaSource, posterAssetId: z.union([z.literal(''), IdSchema]).optional() }).strict().superRefine(atMostOneMediaSource),
   FileBlockSchema.extend({ assetId: DraftAssetIdSchema, label: plainText(120).default('') }),
@@ -129,7 +141,7 @@ export const DraftContentBlockSchema = z.discriminatedUnion('type', [
 
 export const CreationFormatSchema = z.enum(['text', 'audio', 'video']);
 export type CreationFormat = z.infer<typeof CreationFormatSchema>;
-export const CreationKindSchema = z.enum(['article', 'project', 'mixed']);
+export const CreationKindSchema = z.enum(['article', 'project', 'mixed', 'note']);
 const creationShape = {
   kind: CreationKindSchema.default('mixed'),
   title: plainText(CONTENT_LIMITS.titleCharacters).default(''),
@@ -173,6 +185,25 @@ export const PublishableCreationSchema = z.object({ ...creationShape, blocks: z.
 });
 export type CreationDraft = z.infer<typeof CreationDraftSchema>;
 export type CreationSaveInput = z.infer<typeof CreationSaveInputSchema>;
+
+/** Both release batches and the static build enforce real image references.
+ * Missing assets are permitted only while a bounded release batch is unfinished. */
+export function comparisonMediaProblems(creations: readonly Pick<CreationDraft, 'blocks'>[], assets: readonly PublicMediaAsset[], requireAll = true) {
+  const byId = new Map(assets.map(asset => [asset.id, asset]));
+  const problems: Array<{ entryIndex: number; blockIndex: number; side: 'before' | 'after'; message: string }> = [];
+  creations.forEach((entry, entryIndex) => entry.blocks.forEach((block, blockIndex) => {
+    if (block.type !== 'compare') return;
+    for (const side of ['before', 'after'] as const) {
+      const asset = byId.get(block[side].assetId);
+      if (!asset && !requireAll) continue;
+      if (!asset || asset.kind !== 'image' || !asset.variants.some(variant => ['content', 'large', 'thumb'].includes(variant.role)
+        && variant.mime.startsWith('image/') && variant.width && variant.height)) {
+        problems.push({ entryIndex, blockIndex, side, message: `双图对比${side === 'before' ? '第一' : '第二'}张需要已处理完成、具有真实尺寸的图片` });
+      }
+    }
+  }));
+  return problems;
+}
 
 /** A mixed entry appears under each matching tab. kind never substitutes for media formats. */
 export function deriveFormats(input: readonly ContentBlock[] | Pick<CreationDraft, 'blocks'>): CreationFormat[] {

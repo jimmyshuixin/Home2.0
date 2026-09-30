@@ -46,6 +46,7 @@ function blockText(block: ContentBlock): string {
   switch (block.type) {
     case 'richtext': return richText(block.document);
     case 'image': return words([block.alt, block.caption]);
+    case 'compare': return words([block.before.label, block.before.alt, block.after.label, block.after.alt, block.caption]);
     case 'gallery': return block.items.map(photo => words([photo.alt, photo.caption])).join('\n');
     case 'audio': return words([block.title, block.artist, block.transcript]);
     case 'video': return block.transcript || '';
@@ -65,8 +66,9 @@ export function searchRecords(input: unknown): { releaseId: string; records: Sea
       meta: { title, category, publishedAt }, filters: { category: [category] } });
   };
   add('/about', `关于 · ${snapshot.settings.siteTitle}`, words([snapshot.settings.intro, richText(snapshot.settings.about)]), 'about');
+  if (snapshot.settings.now) add('/now', '近况 · 最近在做的事', snapshot.settings.now.text, 'now', snapshot.settings.now.updatedAt || '');
   for (const entry of snapshot.creations) {
-    add(`/creations/${entry.slug}`, entry.title, words([entry.summary, entry.tags.join(' '), ...entry.blocks.map(blockText)]), 'creation', entry.publishedAt);
+    add(`/creations/${entry.slug}`, entry.title, words([entry.summary, entry.tags.join(' '), ...entry.blocks.map(blockText)]), entry.kind === 'note' ? 'note' : 'creation', entry.publishedAt);
   }
   for (const album of snapshot.albums) {
     // No asset properties, coordinates, EXIF, map settings or source URLs are indexed.

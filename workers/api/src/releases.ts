@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { projectPublicTopics } from '@xvyin/contracts';
+import { projectPublicTopics, comparisonMediaProblems } from '@xvyin/contracts';
 import { HERO_TITLE, SiteSettingsSchema, FitnessSettingsDraftSchema, PublishableCreationSchema, PublishableAlbumSchema, PublishablePlaylistSchema, PublishableFitnessEntrySchema, PhotoMapSettingsSchema, PhotoCoordinatesSchema, PublicPhotoLocationSchema, IdSchema, Sha256Schema, PublicMediaAssetSchema, approximatePhotoCity, deriveFormats, fitnessDayCount, type SiteSettings, type FitnessSettingsDraft, type CreationDraft, type PublishableAlbum, type FitnessEntryDraft, type PlaylistDraft, type PublicMediaAsset, type PublicPhotoLocation } from '@xvyin/contracts';
 import type { Store } from './store/types';
 import type { DraftRecord } from './records';
@@ -150,6 +150,10 @@ function publicAsset(asset: MediaAsset | null | undefined, id: string): PublicMe
   assert(asset?.id === id && asset.status === 'ready' && asset.variants.length, 'MEDIA_NOT_READY', 422, '引用的媒体尚未处理完成');
   const photography = asset.metadata?.kind === 'image' ? asset.metadata.photography : undefined;
   return PublicMediaAssetSchema.parse({ id: asset.id, kind: asset.kind, ...(photography ? { photography } : {}), variants: asset.variants.map(({ key: _key, sha256: _sha, ...variant }) => ({ ...variant, url: `/api/v1/media/${asset.id}/${variant.role}` })) });
+}
+function validateComparisons(snapshot: Snapshot, complete: boolean): void {
+  const problem = comparisonMediaProblems(snapshot.creations, snapshot.assets, complete)[0];
+  assert(!problem, 'PUBLISH_VALIDATION', 422, problem?.message || '双图对比图片无效');
 }
 /** A code/metadata rebuild cannot quietly replace or drop previously public media. */
 function refreshedPublishedAsset(asset: MediaAsset | null | undefined, previous: PublicMediaAsset): PublicMediaAsset {
@@ -308,6 +312,7 @@ export class Releases {
     applyPhotoLocations(snapshot, resolvePhotoLocations(pendingPhotoLocations, assets, batchIds));
     const inspected = new Set(batchIds), remainingLocations = pendingPhotoLocations.filter(item => !inspected.has(item.assetId));
     const snapshotPrepared = freshIds.length === batchIds.length && remainingLocations.length === 0;
+    validateComparisons(snapshot, snapshotPrepared);
     // This private queue freezes only the selected revision's EXIF choices. It
     // is removed before SSG/public APIs can access a completed snapshot.
     const source: SnapshotSource = remainingLocations.length ? { ...snapshot, pendingPhotoLocations: remainingLocations } : snapshot;
@@ -372,6 +377,7 @@ export class Releases {
         : remainingLocationIds.slice(progress.locationProcessed || 0, (progress.locationProcessed || 0) + RELEASE_ASSET_BATCH_SIZE);
       const records = await this.store.getMany<MediaAsset>(batchIds.map(assetId => `media/${assetId}`));
       const publicAssets = batchIds.map((assetId, index) => previous ? refreshedPublishedAsset(records[index], previousById.get(assetId)!) : publicAsset(records[index], assetId));
+      validateComparisons({ ...snapshot, assets: [...snapshot.assets, ...progress.assets, ...publicAssets] }, false);
       const locations = resolvePhotoLocations(pendingPhotoLocations, records, batchIds);
       const next: SnapshotPreparationState = { ...progress,
         processed: progress.processed + (preparingAssets ? batchIds.length : 0),
@@ -395,6 +401,7 @@ export class Releases {
     let snapshotSha256 = job.snapshotSha256;
     if (complete) {
       snapshot.assets.push(...progress.assets);
+      validateComparisons(snapshot, true);
       applyPhotoLocations(snapshot, progress.locations || {});
       const json = await immutableJson(this.bucket, `private-snapshots/${id}.json`, snapshot, 10 * 1024 * 1024);
       snapshotSha256 = await sha256(json);
